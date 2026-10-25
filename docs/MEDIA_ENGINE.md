@@ -130,6 +130,7 @@ clip.mp4 -> small.mp4  [MP4 (H.264 + AAC)]  50 frames, 2.0s of media, 61.5 KB in
 | `--height <px>` | Scale down to this height, keeping the aspect ratio. Never upscales. |
 | `--fps <n>` | Output frame rate. |
 | `--video-kbps <n>` / `--audio-kbps <n>` | Fixed bitrates (video bitrate overrides quality). |
+| `--start <s>` / `--end <s>` | Keep only this part of the clip, in seconds from the start. Either can be left out. |
 
 A progress line is shown while it works. Pressing Ctrl-C stops the process and can leave a
 partial output file, so delete it. (Cancelling through the library's progress callback
@@ -379,8 +380,11 @@ non-zero time (common in MPEG-TS) are rebased, so the first frame is at 0 s.
 
 ### Frames and the cache
 
-`FrameReader` addresses frames by index (`time × fps`). That is exact for constant frame
-rate footage and approximate for variable frame rate. The cache holds decoded RGBA frames
+`FrameReader` addresses frames by index. For constant frame rate footage the index is
+`time × fps`. When the container reports a variable frame rate (common in phone clips and
+screen recordings), the reader first reads every frame's timestamp, which takes one quick
+pass over the file and no decoding, so lookups stay exact. `FrameReader::open_exact` forces
+that for any file, and `frame_count()` then gives the true number of frames. The cache holds decoded RGBA frames
 under a byte budget and evicts the least recently used. It always keeps at least one frame
 even if that frame alone exceeds the budget.
 
@@ -438,11 +442,10 @@ enforcement. GitHub Actions runs format, lint and tests on every push
 
 Known limits, stated plainly:
 
-- **Colour.** Decoded RGBA uses FFmpeg's default YUV→RGB conversion (BT.601, limited range). HD and HDR footage mastered differently will look slightly off in decoded frames, and exports do not yet write explicit colour tags (primaries, transfer, range) on the output. Proper colour management belongs in the Render Engine.
-- **Variable frame rate** is approximated when addressing frames by index.
+- **Colour.** Decoding uses the clip's own YUV matrix and range (BT.601, BT.709 or BT.2020; untagged HD is treated as BT.709, untagged SD as BT.601), and exports keep that matrix and write colour tags on the output. Exports are 8-bit (10-bit for ProRes), so HDR footage (PQ/HLG) keeps its tags but loses precision, and there is no tone mapping. Full colour management belongs in the Render Engine.
 - **Audio export** is stereo or mono; surround is mixed down.
 - **FLAC exports** carry no total length in their header, so some tools show no duration. The audio is complete.
-- **No trimming or cutting.** That is the Timeline Engine's job.
+- **Trimming** is supported on export (a start and end time). Cutting and joining several clips is the Timeline Engine's job.
 
 Full detail and the licensing note (FFmpeg's x264/x265 are GPL) are in
 [`ROADMAP.md`](ROADMAP.md); every default chosen while building it is in

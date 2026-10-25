@@ -35,6 +35,10 @@ pub struct ExportSettings {
     pub keyint: Option<u32>,
     /// Put the index at the front of MP4/MOV files so they stream and open instantly.
     pub fast_start: bool,
+    /// Keep only the part of the clip from this time (seconds from the start).
+    pub start_secs: Option<f64>,
+    /// Keep only the part of the clip up to this time (seconds from the start).
+    pub end_secs: Option<f64>,
 }
 
 impl ExportSettings {
@@ -48,6 +52,8 @@ impl ExportSettings {
             audio_bitrate: None,
             keyint: None,
             fast_start: true,
+            start_secs: None,
+            end_secs: None,
         }
     }
 
@@ -79,6 +85,46 @@ impl ExportSettings {
     pub fn keyint(mut self, frames: u32) -> Self {
         self.keyint = Some(frames);
         self
+    }
+
+    /// Export only `start..end` (seconds from the start of the clip). Either
+    /// side may be `None` to keep the beginning or the end.
+    pub fn trim(mut self, start_secs: Option<f64>, end_secs: Option<f64>) -> Self {
+        self.start_secs = start_secs;
+        self.end_secs = end_secs;
+        self
+    }
+
+    fn trim_range(&self) -> Result<Option<(f64, Option<f64>)>> {
+        let start = self.start_secs.unwrap_or(0.0);
+        if !start.is_finite() || start < 0.0 {
+            return Err(Error::InvalidArgument(
+                "trim start must be 0 or more".into(),
+            ));
+        }
+        if let Some(end) = self.end_secs {
+            if !end.is_finite() || end <= start {
+                return Err(Error::InvalidArgument(
+                    "trim end must be after the start".into(),
+                ));
+            }
+        }
+        if self.start_secs.is_none() && self.end_secs.is_none() {
+            return Ok(None);
+        }
+        Ok(Some((start, self.end_secs)))
+    }
+
+    /// ffmpeg `trim` arguments (without the filter name), or empty.
+    fn trim_args(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(s) = self.start_secs.filter(|s| *s > 0.0) {
+            parts.push(format!("start={s:.6}"));
+        }
+        if let Some(e) = self.end_secs {
+            parts.push(format!("end={e:.6}"));
+        }
+        parts.join(":")
     }
 }
 
@@ -386,6 +432,36 @@ impl VideoPipe {
         if global_header {
             enc.set_flags(codec::Flags::GLOBAL_HEADER);
         }
+
+        // Colour: keep the source's matrix and tag the output with it, so players
+        // do not have to guess (untagged HD is usually guessed right, SD often not).
+        let src_fmt = decoder.format();
+        let colour = crate::colour::resolve(
+            decoder.color_space(),
+            decoder.color_range(),
+            decoder.color_primaries(),
+            decoder.color_transfer_characteristic(),
+            iw,
+            ih,
+            crate::colour::is_full_range_format(src_fmt),
+        );
+        let out_full = spec.pix_fmt.starts_with("yuvj");
+        let tag_colour = settings.preset != ExportPreset::Gif;
+        if tag_colour {
+            enc.set_colorspace(colour.space);
+            enc.set_color_range(if out_full {
+                ffmpeg::color::Range::JPEG
+            } else {
+                ffmpeg::color::Range::MPEG
+            });
+            // SAFETY: `enc` owns a valid, not yet opened AVCodecContext; these are
+            // plain integer fields that ffmpeg-next has no setter for.
+            unsafe {
+                let ctx = enc.as_mut_ptr();
+                (*ctx).color_primaries = colour.primaries.into();
+                (*ctx).color_trc = colour.transfer.into();
+            }
+        }
         if let Some(g) = settings.keyint {
             enc.set_gop(g);
         }
@@ -408,8 +484,29 @@ impl VideoPipe {
             270 => ",transpose=cclock",
             _ => "",
         };
+        let trim = settings.trim_args();
+        let trim = if trim.is_empty() {
+            String::new()
+        } else {
+            format!("trim={trim},setpts=PTS-STARTPTS,")
+        };
+        let matrix = crate::colour::filter_matrix_name(colour.space);
+        let scale_colour = if !tag_colour {
+            String::new()
+        } else if crate::colour::is_yuv_format(src_fmt) {
+            format!(
+                ":in_color_matrix={matrix}:in_range={}:out_color_matrix={matrix}:out_range={}",
+                if colour.full_range { "pc" } else { "tv" },
+                if out_full { "pc" } else { "tv" }
+            )
+        } else {
+            format!(
+                ":out_color_matrix={matrix}:out_range={}",
+                if out_full { "pc" } else { "tv" }
+            )
+        };
         let mut spec_str = format!(
-            "setpts=PTS-{ticks},fps={}/{}{rotate},scale={ow}:{oh}",
+            "setpts=PTS-{ticks},{trim}fps={}/{}{rotate},scale={ow}:{oh}{scale_colour}",
             fps.numerator(),
             fps.denominator()
         );
@@ -635,10 +732,14 @@ impl AudioPipe {
             out.set_channel_layout(opened.channel_layout());
             out.set_sample_rate(opened.rate());
         }
-        graph
-            .output("in", 0)?
-            .input("out", 0)?
-            .parse(&format!("asetpts=PTS-{ticks}"))?;
+        graph.output("in", 0)?.input("out", 0)?.parse(&{
+            let trim = settings.trim_args();
+            if trim.is_empty() {
+                format!("asetpts=PTS-{ticks}")
+            } else {
+                format!("asetpts=PTS-{ticks},atrim={trim},asetpts=PTS-STARTPTS")
+            }
+        })?;
         graph.validate()?;
         if !audio_codec
             .capabilities()
@@ -733,6 +834,7 @@ fn run_export(
 ) -> Result<ExportReport> {
     let started = Instant::now();
     let preset = settings.preset;
+    let trim = settings.trim_range()?;
     let mut ictx = format::input(&input)?;
 
     let video_in = match preset.video() {
@@ -769,6 +871,15 @@ fn run_export(
         let d = ictx.duration();
         (d > 0).then(|| d as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
     };
+    let (trim_start, trim_end) = trim.unwrap_or((0.0, None));
+    let total_secs = total_secs.map(|t| (trim_end.unwrap_or(t).min(t) - trim_start).max(0.0));
+
+    // Jump close to the start so we do not decode what will be thrown away;
+    // the trim filter makes the cut exact.
+    if trim_start > 0.0 {
+        let us = ((origin_secs + trim_start) * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64;
+        ictx.seek(us, ..us)?;
+    }
 
     let mut octx = format::output_as(&output, preset.muxer())?;
     let global_header = octx.format().flags().contains(format::Flags::GLOBAL_HEADER);
@@ -840,7 +951,7 @@ fn run_export(
                 Err(e) => return Err(e.into()),
             }
             v.decode_drain(&mut octx)?;
-            let pos = (v.last_pts_secs - origin_secs).max(0.0);
+            let pos = (v.last_pts_secs - origin_secs - trim_start).max(0.0);
             if !report(pos, v.frames, false) {
                 return Err(Error::Cancelled);
             }
@@ -851,10 +962,20 @@ fn run_export(
             }
             a.decode_drain(&mut octx)?;
             if vpipe.is_none() {
-                let pos = (a.last_pts_secs - origin_secs).max(0.0);
+                let pos = (a.last_pts_secs - origin_secs - trim_start).max(0.0);
                 if !report(pos, 0, false) {
                     return Err(Error::Cancelled);
                 }
+            }
+        }
+        // Everything we still need is already decoded once every active
+        // stream has passed the trim end.
+        if let Some(end) = trim_end {
+            let limit = origin_secs + end + 1.0;
+            let done = vpipe.as_ref().is_none_or(|v| v.last_pts_secs > limit)
+                && apipe.as_ref().is_none_or(|a| a.last_pts_secs > limit);
+            if done {
+                break;
             }
         }
     }
@@ -875,13 +996,15 @@ fn run_export(
     .into_iter()
     .flatten()
     .fold(0.0_f64, f64::max);
-    report((end_secs - origin_secs).max(0.0), frames, true);
+    let end_rel = trim_end.map_or(end_secs - origin_secs, |e| (end_secs - origin_secs).min(e));
+    let out_secs = (end_rel - trim_start).max(0.0);
+    report(out_secs, frames, true);
 
     Ok(ExportReport {
         frames,
         video_encoder: vpipe.as_ref().map(|v| v.encoder_name.to_string()),
         audio_encoder: apipe.as_ref().map(|a| a.encoder_name.to_string()),
-        duration_secs: (end_secs - origin_secs).max(0.0),
+        duration_secs: out_secs,
         output_bytes: std::fs::metadata(output).map(|m| m.len()).unwrap_or(0),
         elapsed: started.elapsed(),
     })

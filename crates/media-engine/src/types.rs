@@ -65,6 +65,8 @@ pub struct VideoStreamInfo {
     /// to apply, typically set by phones filmed in portrait. The decoder and
     /// exporter apply it automatically; `width`/`height` are the *coded* size.
     pub rotation: u32,
+    /// Colour matrix, range, primaries and transfer curve, as tagged in the file.
+    pub colour: crate::colour::ColourInfo,
 }
 
 impl VideoStreamInfo {

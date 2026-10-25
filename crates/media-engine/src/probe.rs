@@ -59,6 +59,7 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo> {
                     duration_secs,
                     bit_rate: Some(dec.bit_rate() as u64).filter(|&b| b > 0),
                     rotation,
+                    colour: crate::colour::ColourInfo::from_decoder(&dec),
                 });
             }
             Type::Audio => {

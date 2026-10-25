@@ -23,15 +23,14 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
 
 ## Known limitations (honest list)
 
-* **Colour management.** Decode converts YUV to RGBA with FFmpeg's defaults
-  (BT.601, limited range assumed). HD/UHD footage mastered as BT.709 or HDR
-  will look slightly off in `FrameReader` output, and exports do not yet write
-  explicit colour tags (primaries, transfer, range). Proper colour management
-  belongs in the Render Engine; the decoder should then hand over native YUV
-  plus colour metadata instead of RGBA.
-* **Variable frame rate.** `FrameReader` maps time to frame index with the
-  nominal frame rate, which is exact for constant-rate footage and approximate
-  for VFR. Export always conforms to constant frame rate.
+* **Colour management.** Decode and export now honour the clip's YUV matrix
+  and range and tag exports. Still missing: 10-bit output for H.264/H.265/VP9,
+  HDR tone mapping, and wide-gamut conversion. HDR sources keep their tags but
+  are written at 8 bit. Full colour management belongs in the Render Engine,
+  where the decoder should hand over native YUV plus colour metadata.
+* **Variable frame rate** is handled exactly by `FrameReader` through a frame
+  timestamp index (built automatically when the container reports VFR).
+  Export still conforms to constant frame rate.
 * **Audio export is stereo or mono.** Surround sources are downmixed.
 * **No subtitle or chapter handling** beyond listing subtitle streams in probe.
 * **FLAC export** has no total-sample count in its header (FFmpeg's muxer
@@ -39,7 +38,7 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
   duration. Audio data is complete and decodes fine.
 * **GIF export** buffers the palette over the whole clip; fine for short
   clips, memory-hungry for long ones.
-* **Trimming/cutting** is deliberately absent. That is the Timeline Engine's job.
+* **Trimming** works on export (start/end). Cutting and joining clips is the Timeline Engine's job.
 * **Hardware encoders are not used**, so exports are CPU-bound. On the 2-core
   cloud machine this was built on, 1080p to 720p H.264 at the Standard preset
   ran at roughly 2x real time; decode with RGBA conversion ran at ~270 fps.

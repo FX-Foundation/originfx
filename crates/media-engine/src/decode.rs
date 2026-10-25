@@ -25,6 +25,26 @@ fn open_input(path: &Path) -> Result<ffmpeg::format::context::Input> {
     Ok(ffmpeg::format::input(&path)?)
 }
 
+/// Tell swscale which YUV matrix and range the source uses; output is full-range RGB.
+/// Ignored (returns -1 inside FFmpeg) for sources where it does not apply, such as RGB.
+fn set_scaler_colour(scaler: &mut Scaler, table_id: i32, src_full_range: bool) {
+    // SAFETY: `scaler` owns a valid SwsContext for the duration of the call, and
+    // `sws_getCoefficients` returns a pointer to a static table that FFmpeg only reads.
+    unsafe {
+        let table = ffmpeg::ffi::sws_getCoefficients(table_id);
+        ffmpeg::ffi::sws_setColorspaceDetails(
+            scaler.as_mut_ptr(),
+            table,
+            i32::from(src_full_range),
+            table,
+            1,
+            0,
+            1 << 16,
+            1 << 16,
+        );
+    }
+}
+
 /// Stream start offset in seconds; many transport streams do not start at 0.
 pub(crate) fn start_offset_secs(stream: &ffmpeg::format::stream::Stream) -> f64 {
     let start = stream.start_time();
@@ -121,6 +141,8 @@ pub struct VideoDecoder {
     origin_secs: f64,
     decoder: ffmpeg::decoder::Video,
     scaler: Option<(Pixel, u32, u32, Scaler)>,
+    /// Matrix table id and source range the scaler was configured for.
+    scaler_colour: Option<(i32, bool)>,
     info: VideoStreamInfo,
     eof_sent: bool,
     /// A decoded frame that was read ahead and must be returned first.
@@ -178,6 +200,7 @@ impl VideoDecoder {
             duration_secs: stream_duration_secs(stream.duration(), time_base),
             bit_rate: Some(decoder.bit_rate() as u64).filter(|&b| b > 0),
             rotation: stream_rotation(&stream),
+            colour: crate::colour::ColourInfo::from_decoder(&decoder),
         };
 
         Ok(Self {
@@ -187,6 +210,7 @@ impl VideoDecoder {
             origin_secs,
             decoder,
             scaler: None,
+            scaler_colour: None,
             info,
             eof_sent: false,
             held: None,
@@ -261,11 +285,25 @@ impl VideoDecoder {
     /// Convert a raw decoder frame to tightly packed RGBA.
     fn convert(&mut self, raw: &ffmpeg::frame::Video) -> Result<VideoFrame> {
         let (w, h, fmt) = (raw.width(), raw.height(), raw.format());
-        let needs_new =
-            !matches!(&self.scaler, Some((f, sw, sh, _)) if *f == fmt && *sw == w && *sh == h);
+        // Decode with the matrix the clip was encoded with, not swscale's
+        // default (BT.601), or HD footage comes out with shifted colours.
+        let colour = crate::colour::resolve(
+            raw.color_space(),
+            raw.color_range(),
+            raw.color_primaries(),
+            raw.color_transfer_characteristic(),
+            w,
+            h,
+            crate::colour::is_full_range_format(fmt),
+        );
+        let colour_key = (crate::colour::sws_table_id(colour.space), colour.full_range);
+        let needs_new = self.scaler_colour != Some(colour_key)
+            || !matches!(&self.scaler, Some((f, sw, sh, _)) if *f == fmt && *sw == w && *sh == h);
         if needs_new {
-            let scaler = Scaler::get(fmt, w, h, Pixel::RGBA, w, h, Flags::BILINEAR)?;
+            let mut scaler = Scaler::get(fmt, w, h, Pixel::RGBA, w, h, Flags::BILINEAR)?;
+            set_scaler_colour(&mut scaler, colour_key.0, colour_key.1);
             self.scaler = Some((fmt, w, h, scaler));
+            self.scaler_colour = Some(colour_key);
         }
         let scaler = &mut self.scaler.as_mut().expect("scaler just created").3;
 
