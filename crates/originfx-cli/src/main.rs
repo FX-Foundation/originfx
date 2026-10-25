@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use media_engine::{
-    hwaccel, probe, Error, ExportPreset, ExportSettings, FrameReader, MediaInfo, ProxyManager,
-    ProxySettings, Quality, VideoDecoder,
+    hwaccel, probe, DecodeOptions, Error, ExportPreset, ExportSettings, FrameReader, HwApi,
+    HwPolicy, MediaInfo, ProxyManager, ProxySettings, Quality, VideoDecoder,
 };
 
 #[derive(Parser)]
@@ -77,6 +77,9 @@ enum Command {
         at: f64,
         #[arg(short, long, default_value = "frame.png")]
         out: PathBuf,
+        /// GPU decoding: off, auto (try CUDA then VA-API, else software), cuda or vaapi.
+        #[arg(long, value_enum, default_value = "off")]
+        hw: HwArg,
     },
     /// Create (or find) the low-resolution proxy for a file.
     Proxy {
@@ -98,6 +101,9 @@ enum Command {
         /// Also test random access: seek this many times.
         #[arg(long, default_value_t = 20)]
         seeks: u32,
+        /// GPU decoding: off, auto (try CUDA then VA-API, else software), cuda or vaapi.
+        #[arg(long, value_enum, default_value = "off")]
+        hw: HwArg,
     },
 }
 
@@ -106,6 +112,35 @@ enum QualityArg {
     Draft,
     Standard,
     High,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum HwArg {
+    Off,
+    Auto,
+    Cuda,
+    Vaapi,
+}
+
+impl From<HwArg> for DecodeOptions {
+    fn from(hw: HwArg) -> Self {
+        let hw = match hw {
+            HwArg::Off => HwPolicy::Off,
+            HwArg::Auto => HwPolicy::Auto,
+            HwArg::Cuda => HwPolicy::Require(HwApi::Cuda),
+            HwArg::Vaapi => HwPolicy::Require(HwApi::Vaapi),
+        };
+        DecodeOptions { hw }
+    }
+}
+
+/// "cuda", or "software" plus the reason the GPU was not used when it was asked for.
+fn backend_label(dec: &VideoDecoder) -> String {
+    match (dec.hw_backend(), dec.hw_fallback_reason()) {
+        (Some(api), _) => api.to_string(),
+        (None, Some(why)) => format!("software (GPU not used: {why})"),
+        (None, None) => "software".to_string(),
+    }
 }
 
 impl From<QualityArg> for Quality {
@@ -216,16 +251,17 @@ fn run(cmd: Command) -> CliResult {
                 );
             }
         }
-        Command::Frame { file, at, out } => {
-            let mut reader = FrameReader::open(&file, 256 * 1024 * 1024)?;
+        Command::Frame { file, at, out, hw } => {
+            let mut reader = FrameReader::open_with(&file, 256 * 1024 * 1024, hw.into())?;
             let frame = reader.frame_at(at)?;
             png::write_rgba(&out, frame.width, frame.height, &frame.data)?;
             println!(
-                "saved {}x{} frame at {:.3}s to {}",
+                "saved {}x{} frame at {:.3}s to {}  [decode: {}]",
                 frame.width,
                 frame.height,
                 frame.pts_secs,
-                out.display()
+                out.display(),
+                backend_label(reader.decoder())
             );
         }
         Command::Proxy { file, dir, height } => {
@@ -246,7 +282,8 @@ fn run(cmd: Command) -> CliResult {
             file,
             frames,
             seeks,
-        } => bench(&file, frames, seeks)?,
+            hw,
+        } => bench(&file, frames, seeks, hw.into())?,
     }
     Ok(())
 }
@@ -488,16 +525,16 @@ fn print_hw() {
         }
     );
     println!(
-        "note: the engine does not use GPU decode/encode yet; this only reports what is available."
+        "note: GPU decoding (cuda, vaapi) is used with --hw on `frame` and `bench`; GPU encoding is not used yet."
     );
 }
 
-fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
+fn bench(file: &Path, max_frames: u64, seeks: u32, options: DecodeOptions) -> CliResult {
     let info = probe(file)?;
     let v = info.primary_video().ok_or(Error::NoStream("video"))?;
     println!("{}  {}x{} {}", file.display(), v.width, v.height, v.codec);
 
-    let mut dec = VideoDecoder::open(file)?;
+    let mut dec = VideoDecoder::open_with(file, options)?;
     let start = Instant::now();
     let mut n = 0u64;
     while n < max_frames {
@@ -507,6 +544,7 @@ fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
         n += 1;
     }
     let secs = start.elapsed().as_secs_f64().max(1e-9);
+    println!("decode backend: {}", backend_label(&dec));
     println!(
         "sequential decode (incl. RGBA convert): {n} frames in {secs:.2}s = {:.1} fps",
         n as f64 / secs
@@ -515,7 +553,7 @@ fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
     if seeks > 0 {
         let dur = info.duration_secs.unwrap_or(0.0);
         if dur > 0.0 {
-            let mut reader = FrameReader::open(file, 64 * 1024 * 1024)?;
+            let mut reader = FrameReader::open_with(file, 64 * 1024 * 1024, options)?;
             let start = Instant::now();
             for i in 0..seeks {
                 let t = dur * (f64::from((i * 7919) % seeks) / f64::from(seeks));
@@ -523,8 +561,9 @@ fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
             }
             let secs = start.elapsed().as_secs_f64();
             println!(
-                "random access: {seeks} seeks in {secs:.2}s = {:.1} ms per frame",
-                secs * 1000.0 / f64::from(seeks)
+                "random access: {seeks} seeks in {secs:.2}s = {:.1} ms per frame  [decode: {}]",
+                secs * 1000.0 / f64::from(seeks),
+                backend_label(reader.decoder())
             );
         }
     }

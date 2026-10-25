@@ -46,14 +46,14 @@ flowchart LR
     X --> O[(Output file)]
     F --> PX[ProxyManager]
     PX --> D
-    HW[hwaccel<br/><i>probe only</i>] -.-> D
+    HW[hwaccel<br/><i>GPU decode</i>] -.-> D
 ```
 
 **Design rules**
 
 - **It is a library, not an app.** No windows, no buttons. Other engines call it; the CLI is only a thin front-end for trying it out.
 - **No FFmpeg types in the public API.** The rest of OriginFX never imports FFmpeg, so the backend can change without breaking anything above it.
-- **Correct before fast.** Seeking is frame-accurate, rotation is applied, output is constant frame rate. GPU speed comes later (see [status](#9-status-and-limits)).
+- **Correct before fast.** Seeking is frame-accurate, rotation is applied, output is constant frame rate. GPU decoding is optional and returns exactly the same frames as software (see [GPU decoding](#gpu-decoding)).
 - **Private.** Nothing leaves your machine.
 
 ---
@@ -140,8 +140,13 @@ removes the partial file for you.)
 
 ```console
 $ originfx frame clip.mp4 --at 1.0 -o still.png
-saved 320x180 frame at 1.000s to still.png
+saved 320x180 frame at 1.000s to still.png  [decode: software]
+$ originfx frame clip.mp4 --at 1.0 -o still.png --hw auto
+saved 320x180 frame at 1.000s to still.png  [decode: cuda]
 ```
+
+`--hw` is `off` (default), `auto` (CUDA, then VA-API, else software), `cuda` or `vaapi`
+(that API or an error). `bench` takes the same option.
 
 ### `proxy`: a small copy for fast editing
 
@@ -155,8 +160,8 @@ Running it again prints `existing proxy: ...` and does no work.
 ### `presets`, `hw`, `bench`
 
 - `presets` lists all 19 formats and whether your FFmpeg can write each one.
-- `hw` reports which GPU acceleration APIs your machine exposes (CUDA, VA-API, Quick Sync, Vulkan...) and whether a device can actually be opened. Paste its output when reporting GPU issues. *The engine does not decode on the GPU yet; this is groundwork.*
-- `bench` measures sequential decode speed and random-access cost on a file you choose.
+- `hw` reports which GPU acceleration APIs your machine exposes (CUDA, VA-API, Quick Sync, Vulkan...) and whether a device can actually be opened. Paste its output when reporting GPU issues. The engine decodes with CUDA (NVDEC) and VA-API; it does not encode on the GPU yet.
+- `bench` measures sequential decode speed and random-access cost on a file you choose. Add `--hw auto` (or `cuda`, `vaapi`) to measure GPU decoding; it prints which backend was used.
 
 ---
 
@@ -214,6 +219,34 @@ println!("{:?}", reader.cache_stats()); // hits, misses, entries, bytes
 Frames come back as `Arc<VideoFrame>`: handing one to the renderer costs nothing, and
 evicting it from the cache never invalidates a copy someone is still using. Asking for a
 frame past the end returns the last frame.
+
+### GPU decoding
+
+Decoding stays in software unless you ask. `VideoDecoder::open_with` and
+`FrameReader::open_with` (and `open_exact_with`) take `DecodeOptions`:
+
+```rust
+use media_engine::{DecodeOptions, FrameReader, HwApi, HwPolicy, VideoDecoder};
+
+let auto = DecodeOptions { hw: HwPolicy::Auto };            // CUDA, then VA-API, else software
+let mut reader = FrameReader::open_with("clip.mp4", 512 * 1024 * 1024, auto)?;
+let frame = reader.frame_at(12.480)?;
+println!("{:?}", reader.decoder().hw_backend());           // Some(Cuda), or None for software
+
+let strict = DecodeOptions { hw: HwPolicy::Require(HwApi::Vaapi) }; // VA-API or an error
+let mut dec = VideoDecoder::open_with("clip.mp4", strict)?;
+```
+
+- **Same frames.** Each GPU frame is copied back to system memory and converted to RGBA by
+  the same code as software, so frames are byte-identical (the tests check this) and seeking,
+  rotation, colour handling and the frame cache behave exactly as before.
+- **`Auto` never fails because of the GPU.** If no device opens, the GPU cannot decode the
+  codec, or a frame fails to come back, it continues in software from the same frame.
+  `hw_backend()` says what is in use (settled after the first frame) and
+  `hw_fallback_reason()` says why the GPU is not.
+- **`Require(api)`** returns `Error::Unsupported` instead of falling back.
+- Only 8- and 10-bit 4:2:0 video goes to the GPU; 4:2:2, 4:4:4 and RGB stay in software.
+- Export still decodes in software.
 
 ### Audio
 
@@ -357,7 +390,7 @@ crates/media-engine/src/
 ├── preset.rs     ExportPreset table: container, encoders, defaults
 ├── transcode.rs  the export pipeline
 ├── proxy.rs      ProxyManager
-└── hwaccel.rs    GPU API discovery
+└── hwaccel.rs    GPU API discovery and GPU decode setup
 ```
 
 ### The export pipeline
@@ -413,12 +446,38 @@ numbers.
 
 Exports are CPU-bound today because GPU encoders are not used yet.
 
+### GPU decoding
+
+Measured on a **laptop with an NVIDIA RTX 3050 Laptop GPU (CUDA/NVDEC) and an Intel iGPU
+(VA-API, iHD driver)**, 12 CPU threads, release build, 20-second 30 fps test clips with a
+keyframe every 2 s. Sequential is 600 frames including the RGBA conversion; random access
+is 20 jumps through `FrameReader`; CPU is total CPU time for the whole `bench` run. One run
+each, so expect ±20% (the CPU was in power-save mode).
+
+| Clip | Software | CUDA | VA-API |
+|---|---|---|---|
+| 1080p H.264 | 104 fps · 48 ms · 16 s CPU | 64 fps · 62 ms · 10 s CPU | 81 fps · 47 ms · 7 s CPU |
+| 1080p VP9 | 128 fps · 91 ms · 14 s CPU | 92 fps · 34 ms · 7 s CPU | 77 fps · 24 ms · 8 s CPU |
+| 4K HEVC 10-bit | 27 fps · 462 ms · 126 s CPU | 28 fps · 94 ms · 21 s CPU | 16 fps · 175 ms · 37 s CPU |
+| 4K AV1 | 46 fps · 284 ms · 55 s CPU | 35 fps · 80 ms · 16 s CPU | not supported by this iGPU |
+
+What this means:
+
+- **Random access is where the GPU wins**: 3-5x faster on 4K, because the frames skipped
+  on the way to the target never leave the GPU.
+- **CPU use drops 2-6x**, leaving the CPU for effects, audio and the UI.
+- **Sequential speed is limited by the RGBA conversion**, which runs on one CPU thread for
+  both paths (about 20-40 ms per 4K frame). A 12-thread CPU decodes in parallel with it,
+  so software can be as fast or faster; the GPU path also has to copy each frame back.
+  Removing that copy needs zero-copy hand-off to the Render Engine.
+- `Auto` tries CUDA first, which was the faster GPU here.
+
 ---
 
 ## 8. Testing
 
 ```bash
-cargo test            # 38 tests
+cargo test            # 72 tests; GPU tests skip themselves without a GPU
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
@@ -443,7 +502,8 @@ enforcement. GitHub Actions runs format, lint and tests on every push
 | Area | Status |
 |---|---|
 | Probe · decode · seek · cache · export · proxies · rotation | **Done and tested** |
-| GPU decode/encode (NVDEC/NVENC, VA-API, Quick Sync) | **Not yet.** `hwaccel` only reports what exists. Needs real hardware to develop against. |
+| GPU decode (NVDEC via CUDA, VA-API) | **Done and tested** on an NVIDIA RTX 3050 Laptop and Intel VA-API (iHD). Off by default. |
+| GPU encode (NVENC, VA-API, Quick Sync) | **Not yet.** |
 | Zero-copy hand-off to wgpu | **Not yet.** Needs the Render Engine. |
 | Cinema RAW (RED, ARRI, Blackmagic) | **Not in the engine.** Planned as optional plugins. |
 | Project interchange (EDL, OTIO, FCPXML, AAF) | **Not started.** Needs the Timeline Engine. |
@@ -474,6 +534,7 @@ Full detail and the licensing note (FFmpeg's x264/x265 are GPL) are in
 | Tests print `skipping: ffmpeg command line tool not found` | `sudo apt install ffmpeg` |
 | Need to see what FFmpeg is doing | `ORIGINFX_FFMPEG_LOG=debug originfx ...` |
 | `originfx hw` shows everything as `[no]` | Normal on machines without matching drivers; the error text next to each entry says why. |
+| `--hw auto` prints `software (GPU not used: ...)` | The text says why: no device, a codec or format this GPU cannot decode, or a GPU error. Decoding carries on in software. |
 
 ---
 

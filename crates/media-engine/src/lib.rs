@@ -18,7 +18,8 @@
 //! | read audio as `f32` samples             | [`AudioDecoder`]                      |
 //! | write a file in a standard format       | [`export`] with an [`ExportPreset`]   |
 //! | make scrubbing cheap for heavy footage  | [`ProxyManager`]                      |
-//! | see which GPU APIs exist (probe only)   | [`hwaccel`]                           |
+//! | decode on the GPU (NVDEC, VA-API)       | [`DecodeOptions`] with [`HwPolicy`]   |
+//! | see which GPU APIs exist                | [`hwaccel`]                           |
 //!
 //! ```no_run
 //! use media_engine::{export, probe, ExportPreset, ExportSettings, FrameReader, Quality};
@@ -63,8 +64,9 @@ pub mod types;
 
 pub use cache::{CacheStats, FrameCache, FrameReader};
 pub use colour::ColourInfo;
-pub use decode::{AudioDecoder, AudioOptions, VideoDecoder};
+pub use decode::{AudioDecoder, AudioOptions, DecodeOptions, VideoDecoder};
 pub use error::{Error, Result};
+pub use hwaccel::{HwApi, HwPolicy};
 pub use index::FrameIndex;
 pub use preset::{ExportPreset, Quality};
 pub use probe::probe;
