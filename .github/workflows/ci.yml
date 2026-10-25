@@ -33,7 +33,18 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          set +e
+          cargo clippy --workspace --all-targets --message-format=short -- -D warnings 2>&1 | tee clippy.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface the failure text as annotations so it is visible without the raw log.
+            grep -iE 'error|panick|failed|not found|cannot|unable|warning:' clippy.log | head -9 \
+              | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit "$status"
 
       - name: Test
         run: cargo test --workspace
