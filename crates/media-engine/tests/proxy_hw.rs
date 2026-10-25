@@ -9,10 +9,17 @@ fn proxy_is_created_once_and_reused() {
     let dir = scratch("proxy1");
     let src = pattern_clip(&dir, "big.mp4", "640x360", 25, 2);
     let _ = std::fs::remove_dir_all(dir.join("proxies")); // scratch dirs survive between runs
-    let pm = ProxyManager::new(dir.join("proxies")).with_settings(ProxySettings { height: 180, keyint: 5 });
+    let pm = ProxyManager::new(dir.join("proxies")).with_settings(ProxySettings {
+        height: 180,
+        keyint: 5,
+    });
 
     assert!(pm.existing(&src).is_none());
-    assert_eq!(pm.resolve(&src, true), src, "no proxy yet: fall back to original");
+    assert_eq!(
+        pm.resolve(&src, true),
+        src,
+        "no proxy yet: fall back to original"
+    );
 
     let p = pm.ensure(&src).unwrap();
     assert!(p.is_file());
@@ -22,7 +29,11 @@ fn proxy_is_created_once_and_reused() {
     let before = std::fs::metadata(&p).unwrap().modified().unwrap();
     let again = pm.ensure(&src).unwrap();
     assert_eq!(again, p);
-    assert_eq!(std::fs::metadata(&again).unwrap().modified().unwrap(), before, "must not regenerate");
+    assert_eq!(
+        std::fs::metadata(&again).unwrap().modified().unwrap(),
+        before,
+        "must not regenerate"
+    );
 
     assert_eq!(pm.existing(&src), Some(p.clone()));
     assert_eq!(pm.resolve(&src, true), p);

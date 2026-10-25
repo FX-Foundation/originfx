@@ -70,12 +70,20 @@ pub struct VideoStreamInfo {
 impl VideoStreamInfo {
     /// Width after rotation is applied, i.e. what the viewer sees.
     pub fn display_width(&self) -> u32 {
-        if self.rotation % 180 == 90 { self.height } else { self.width }
+        if self.rotation % 180 == 90 {
+            self.height
+        } else {
+            self.width
+        }
     }
 
     /// Height after rotation is applied.
     pub fn display_height(&self) -> u32 {
-        if self.rotation % 180 == 90 { self.width } else { self.height }
+        if self.rotation % 180 == 90 {
+            self.width
+        } else {
+            self.height
+        }
     }
 }
 

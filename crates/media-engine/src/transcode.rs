@@ -14,9 +14,9 @@ use ffmpeg::{codec, filter, format, frame, picture, Dictionary, Packet, Rational
 use ffmpeg_next as ffmpeg;
 
 use crate::decode::start_offset_secs;
-use crate::probe::stream_rotation;
 use crate::error::{Error, Result};
 use crate::preset::{find_encoder, AudioSpec, ExportPreset, Quality, VideoSpec};
+use crate::probe::stream_rotation;
 
 /// Everything configurable about an export.
 #[derive(Debug, Clone)]
@@ -147,11 +147,20 @@ pub fn export_with_progress(
 // ---------------------------------------------------------------------------
 
 fn gcd(a: i64, b: i64) -> i64 {
-    if b == 0 { a.abs() } else { gcd(b, a % b) }
+    if b == 0 {
+        a.abs()
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 fn rational_from_fps(fps: f64) -> Rational {
-    for (n, d) in [(24_000, 1001), (30_000, 1001), (60_000, 1001), (120_000, 1001)] {
+    for (n, d) in [
+        (24_000, 1001),
+        (30_000, 1001),
+        (60_000, 1001),
+        (120_000, 1001),
+    ] {
         if (fps - f64::from(n) / f64::from(d)).abs() < 0.01 {
             return Rational::new(n, d);
         }
@@ -273,7 +282,9 @@ fn new_encoder_context(codec: &ffmpeg::Codec) -> Result<codec::context::Context>
     unsafe {
         let ptr = ffmpeg::ffi::avcodec_alloc_context3(codec.as_ptr());
         if ptr.is_null() {
-            return Err(Error::Unsupported("out of memory allocating encoder".into()));
+            return Err(Error::Unsupported(
+                "out of memory allocating encoder".into(),
+            ));
         }
         Ok(codec::context::Context::wrap(ptr, None))
     }
@@ -324,11 +335,17 @@ impl VideoPipe {
         let decoder = dctx.decoder().video()?;
         let (iw, ih) = (decoder.width(), decoder.height());
         if iw == 0 || ih == 0 {
-            return Err(Error::InvalidArgument("video stream has no dimensions".into()));
+            return Err(Error::InvalidArgument(
+                "video stream has no dimensions".into(),
+            ));
         }
         let rotation = stream_rotation(&ist);
         // Dimensions as the viewer sees them, after rotation.
-        let (vw, vh) = if rotation % 180 == 90 { (ih, iw) } else { (iw, ih) };
+        let (vw, vh) = if rotation % 180 == 90 {
+            (ih, iw)
+        } else {
+            (iw, ih)
+        };
         let (ow, oh) = target_dims(vw, vh, settings);
 
         let avg = ist.avg_frame_rate();
@@ -341,7 +358,11 @@ impl VideoPipe {
         if settings.preset == ExportPreset::Gif {
             fps_f = fps_f.min(15.0);
         }
-        let fps = if settings.fps.is_none() && avg.numerator() > 0 && avg.denominator() > 0 && fps_f == src_fps {
+        let fps = if settings.fps.is_none()
+            && avg.numerator() > 0
+            && avg.denominator() > 0
+            && fps_f == src_fps
+        {
             Rational::new(avg.numerator(), avg.denominator())
         } else {
             rational_from_fps(fps_f)
@@ -378,7 +399,9 @@ impl VideoPipe {
         ost.set_time_base(fps.invert());
 
         // Filter graph: rebase timestamps, conform to constant fps, scale, convert pixel format.
-        let ticks = (origin_secs * f64::from(in_tb.denominator()) / f64::from(in_tb.numerator().max(1))).round() as i64;
+        let ticks = (origin_secs * f64::from(in_tb.denominator())
+            / f64::from(in_tb.numerator().max(1)))
+        .round() as i64;
         let rotate = match rotation {
             90 => ",transpose=clock",
             180 => ",hflip,vflip",
@@ -410,8 +433,17 @@ impl VideoPipe {
             in_tb.denominator(),
         );
         let mut graph = filter::Graph::new();
-        graph.add(&filter::find("buffer").ok_or_else(|| Error::Unsupported("buffer filter".into()))?, "in", &args)?;
-        graph.add(&filter::find("buffersink").ok_or_else(|| Error::Unsupported("buffersink filter".into()))?, "out", "")?;
+        graph.add(
+            &filter::find("buffer").ok_or_else(|| Error::Unsupported("buffer filter".into()))?,
+            "in",
+            &args,
+        )?;
+        graph.add(
+            &filter::find("buffersink")
+                .ok_or_else(|| Error::Unsupported("buffersink filter".into()))?,
+            "out",
+            "",
+        )?;
         graph.output("in", 0)?.input("out", 0)?.parse(&spec_str)?;
         graph.validate()?;
 
@@ -448,7 +480,14 @@ impl VideoPipe {
 
     fn filter_drain(&mut self, octx: &mut format::context::Output) -> Result<()> {
         let mut out = frame::Video::empty();
-        while self.filter.get("out").unwrap().sink().frame(&mut out).is_ok() {
+        while self
+            .filter
+            .get("out")
+            .unwrap()
+            .sink()
+            .frame(&mut out)
+            .is_ok()
+        {
             out.set_kind(picture::Type::None);
             self.encoder.send_frame(&out)?;
             self.frames += 1;
@@ -462,7 +501,8 @@ impl VideoPipe {
         while self.decoder.receive_frame(&mut f).is_ok() {
             let Some(ts) = f.timestamp() else { continue };
             f.set_pts(Some(ts));
-            self.last_pts_secs = ts as f64 * f64::from(self.in_tb.numerator()) / f64::from(self.in_tb.denominator());
+            self.last_pts_secs =
+                ts as f64 * f64::from(self.in_tb.numerator()) / f64::from(self.in_tb.denominator());
             self.filter.get("in").unwrap().source().add(&f)?;
             self.filter_drain(octx)?;
         }
@@ -554,7 +594,11 @@ impl AudioPipe {
         enc.set_channels(out_layout.channels());
         enc.set_format(sample_fmt);
         if spec.lossy {
-            let default = if out_layout.channels() == 1 { 128_000 } else { 192_000 };
+            let default = if out_layout.channels() == 1 {
+                128_000
+            } else {
+                192_000
+            };
             enc.set_bit_rate(settings.audio_bitrate.unwrap_or(default) as usize);
         }
         enc.set_time_base((1, rate as i32));
@@ -562,7 +606,9 @@ impl AudioPipe {
         let opened = enc.open_as(codec_found)?;
         ost.set_parameters(&opened);
 
-        let ticks = (origin_secs * f64::from(in_tb.denominator()) / f64::from(in_tb.numerator().max(1))).round() as i64;
+        let ticks = (origin_secs * f64::from(in_tb.denominator())
+            / f64::from(in_tb.numerator().max(1)))
+        .round() as i64;
         let args = format!(
             "time_base={}/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
             in_tb.numerator(),
@@ -572,8 +618,17 @@ impl AudioPipe {
             in_layout.bits()
         );
         let mut graph = filter::Graph::new();
-        graph.add(&filter::find("abuffer").ok_or_else(|| Error::Unsupported("abuffer filter".into()))?, "in", &args)?;
-        graph.add(&filter::find("abuffersink").ok_or_else(|| Error::Unsupported("abuffersink filter".into()))?, "out", "")?;
+        graph.add(
+            &filter::find("abuffer").ok_or_else(|| Error::Unsupported("abuffer filter".into()))?,
+            "in",
+            &args,
+        )?;
+        graph.add(
+            &filter::find("abuffersink")
+                .ok_or_else(|| Error::Unsupported("abuffersink filter".into()))?,
+            "out",
+            "",
+        )?;
         {
             let mut out = graph.get("out").unwrap();
             out.set_sample_format(opened.format());
@@ -589,7 +644,11 @@ impl AudioPipe {
             .capabilities()
             .contains(ffmpeg::codec::capabilities::Capabilities::VARIABLE_FRAME_SIZE)
         {
-            graph.get("out").unwrap().sink().set_frame_size(opened.frame_size());
+            graph
+                .get("out")
+                .unwrap()
+                .sink()
+                .set_frame_size(opened.frame_size());
         }
 
         Ok(Self {
@@ -624,7 +683,14 @@ impl AudioPipe {
 
     fn filter_drain(&mut self, octx: &mut format::context::Output) -> Result<()> {
         let mut out = frame::Audio::empty();
-        while self.filter.get("out").unwrap().sink().frame(&mut out).is_ok() {
+        while self
+            .filter
+            .get("out")
+            .unwrap()
+            .sink()
+            .frame(&mut out)
+            .is_ok()
+        {
             self.encoder.send_frame(&out)?;
             self.encode_drain(octx)?;
         }
@@ -639,7 +705,8 @@ impl AudioPipe {
             if f.channel_layout().is_empty() {
                 f.set_channel_layout(ffmpeg::ChannelLayout::default(i32::from(f.channels())));
             }
-            self.last_pts_secs = ts as f64 * f64::from(self.in_tb.numerator()) / f64::from(self.in_tb.denominator());
+            self.last_pts_secs =
+                ts as f64 * f64::from(self.in_tb.numerator()) / f64::from(self.in_tb.denominator());
             self.filter.get("in").unwrap().source().add(&f)?;
             self.filter_drain(octx)?;
         }
@@ -669,7 +736,12 @@ fn run_export(
     let mut ictx = format::input(&input)?;
 
     let video_in = match preset.video() {
-        Some(_) => Some(ictx.streams().best(Type::Video).ok_or(Error::NoStream("video"))?.index()),
+        Some(_) => Some(
+            ictx.streams()
+                .best(Type::Video)
+                .ok_or(Error::NoStream("video"))?
+                .index(),
+        ),
         None => None,
     };
     let audio_in = match preset.audio() {
@@ -687,7 +759,11 @@ fn run_export(
         .filter_map(|i| ictx.stream(i))
         .map(|s| start_offset_secs(&s))
         .fold(f64::INFINITY, f64::min);
-    let origin_secs = if origin_secs.is_finite() { origin_secs } else { 0.0 };
+    let origin_secs = if origin_secs.is_finite() {
+        origin_secs
+    } else {
+        0.0
+    };
 
     let total_secs = {
         let d = ictx.duration();
@@ -698,11 +774,27 @@ fn run_export(
     let global_header = octx.format().flags().contains(format::Flags::GLOBAL_HEADER);
 
     let mut vpipe = match (video_in, preset.video()) {
-        (Some(i), Some(spec)) => Some(VideoPipe::new(&ictx, &mut octx, i, settings, spec, origin_secs, global_header)?),
+        (Some(i), Some(spec)) => Some(VideoPipe::new(
+            &ictx,
+            &mut octx,
+            i,
+            settings,
+            spec,
+            origin_secs,
+            global_header,
+        )?),
         _ => None,
     };
     let mut apipe = match (audio_in, preset.audio()) {
-        (Some(i), Some(spec)) => Some(AudioPipe::new(&ictx, &mut octx, i, settings, spec, origin_secs, global_header)?),
+        (Some(i), Some(spec)) => Some(AudioPipe::new(
+            &ictx,
+            &mut octx,
+            i,
+            settings,
+            spec,
+            origin_secs,
+            global_header,
+        )?),
         _ => None,
     };
 
@@ -715,10 +807,16 @@ fn run_export(
 
     // Muxers may adjust the stream time base when writing the header.
     if let Some(v) = vpipe.as_mut() {
-        v.out_tb = octx.stream(v.out_index).map(|s| s.time_base()).unwrap_or(v.enc_tb);
+        v.out_tb = octx
+            .stream(v.out_index)
+            .map(|s| s.time_base())
+            .unwrap_or(v.enc_tb);
     }
     if let Some(a) = apipe.as_mut() {
-        a.out_tb = octx.stream(a.out_index).map(|s| s.time_base()).unwrap_or(a.enc_tb);
+        a.out_tb = octx
+            .stream(a.out_index)
+            .map(|s| s.time_base())
+            .unwrap_or(a.enc_tb);
     }
 
     let mut last_reported = f64::NEG_INFINITY;
@@ -727,7 +825,11 @@ fn run_export(
             return true;
         }
         last_reported = position;
-        on_progress(&Progress { position_secs: position, total_secs, frames })
+        on_progress(&Progress {
+            position_secs: position,
+            total_secs,
+            frames,
+        })
     };
 
     for (stream, packet) in ictx.packets() {
@@ -766,10 +868,13 @@ fn run_export(
     octx.write_trailer()?;
 
     let frames = vpipe.as_ref().map_or(0, |v| v.frames);
-    let end_secs = [vpipe.as_ref().map(|v| v.last_pts_secs), apipe.as_ref().map(|a| a.last_pts_secs)]
-        .into_iter()
-        .flatten()
-        .fold(0.0_f64, f64::max);
+    let end_secs = [
+        vpipe.as_ref().map(|v| v.last_pts_secs),
+        apipe.as_ref().map(|a| a.last_pts_secs),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(0.0_f64, f64::max);
     report((end_secs - origin_secs).max(0.0), frames, true);
 
     Ok(ExportReport {

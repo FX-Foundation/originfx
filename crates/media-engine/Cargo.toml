@@ -3,7 +3,7 @@ name = "originfx-media-engine"
 description = "OriginFX Media Engine: probe, decode, seek, cache, encode and proxy workflow on top of FFmpeg"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+publish.workspace = true
 repository.workspace = true
 authors.workspace = true
 

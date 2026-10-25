@@ -3,7 +3,7 @@ name = "originfx-cli"
 description = "Command line front-end for the OriginFX engines"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+publish.workspace = true
 repository.workspace = true
 authors.workspace = true
 

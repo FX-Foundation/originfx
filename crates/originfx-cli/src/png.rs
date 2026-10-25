@@ -8,7 +8,11 @@ fn crc32(data: &[u8]) -> u32 {
     for (n, slot) in table.iter_mut().enumerate() {
         let mut c = n as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *slot = c;
     }
@@ -39,7 +43,11 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
 
 /// Encode tightly packed RGBA8 pixels as a PNG.
 pub fn encode_rgba(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
-    assert_eq!(rgba.len(), width as usize * height as usize * 4, "pixel buffer size mismatch");
+    assert_eq!(
+        rgba.len(),
+        width as usize * height as usize * 4,
+        "pixel buffer size mismatch"
+    );
 
     // Raw scanlines, each prefixed with filter type 0 (none).
     let row = width as usize * 4;

@@ -46,11 +46,25 @@ pub fn id_clip(dir: &Path) -> PathBuf {
     let out = dir.join("idclip.mp4");
     if !out.exists() {
         run(&[
-            "-f", "lavfi", "-i",
+            "-f",
+            "lavfi",
+            "-i",
             "nullsrc=size=64x64:rate=30:duration=2,geq=r='255-N':g='N*4':b='128'",
-            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=2",
-            "-c:v", "libx264", "-qp", "0", "-g", "15", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-shortest",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=44100:duration=2",
+            "-c:v",
+            "libx264",
+            "-qp",
+            "0",
+            "-g",
+            "15",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
             out.to_str().unwrap(),
         ]);
     }
@@ -64,9 +78,25 @@ pub fn pattern_clip(dir: &Path, name: &str, size: &str, fps: u32, secs: u32) -> 
         let video = format!("testsrc2=size={size}:rate={fps}:duration={secs}");
         let audio = format!("sine=frequency=330:sample_rate=48000:duration={secs}");
         run(&[
-            "-f", "lavfi", "-i", &video, "-f", "lavfi", "-i", &audio,
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-ac", "2", "-c:a", "aac", "-shortest",
+            "-f",
+            "lavfi",
+            "-i",
+            &video,
+            "-f",
+            "lavfi",
+            "-i",
+            &audio,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-ac",
+            "2",
+            "-c:a",
+            "aac",
+            "-shortest",
             out.to_str().unwrap(),
         ]);
     }

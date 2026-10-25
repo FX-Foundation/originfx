@@ -2,13 +2,11 @@
 
 use std::path::Path;
 
-use ffmpeg_next as ffmpeg;
 use ffmpeg::media::Type;
+use ffmpeg_next as ffmpeg;
 
 use crate::error::{Error, Result};
-use crate::types::{
-    AudioStreamInfo, MediaInfo, Rational, SubtitleStreamInfo, VideoStreamInfo,
-};
+use crate::types::{AudioStreamInfo, MediaInfo, Rational, SubtitleStreamInfo, VideoStreamInfo};
 
 /// Open `path` and describe it.
 ///

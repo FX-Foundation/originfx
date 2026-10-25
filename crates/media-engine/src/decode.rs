@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::path::Path;
 
 use ffmpeg::format::Pixel;
-use ffmpeg::software::scaling::{Context as Scaler, Flags};
 use ffmpeg::media::Type;
+use ffmpeg::software::scaling::{Context as Scaler, Flags};
 use ffmpeg_next as ffmpeg;
 
 use crate::error::{Error, Result};
@@ -62,7 +62,6 @@ fn seek_on_stream(
     }
     Ok(())
 }
-
 
 // ---------------------------------------------------------------------------
 // Video
@@ -150,7 +149,10 @@ impl VideoDecoder {
                 .stream(i)
                 .filter(|s| s.parameters().medium() == Type::Video)
                 .ok_or(Error::NoStream("video"))?,
-            None => ictx.streams().best(Type::Video).ok_or(Error::NoStream("video"))?,
+            None => ictx
+                .streams()
+                .best(Type::Video)
+                .ok_or(Error::NoStream("video"))?,
         };
         let index = stream.index();
         let time_base = stream.time_base();
@@ -177,7 +179,6 @@ impl VideoDecoder {
             bit_rate: Some(decoder.bit_rate() as u64).filter(|&b| b > 0),
             rotation: stream_rotation(&stream),
         };
-        drop(stream);
 
         Ok(Self {
             ictx,
@@ -260,7 +261,8 @@ impl VideoDecoder {
     /// Convert a raw decoder frame to tightly packed RGBA.
     fn convert(&mut self, raw: &ffmpeg::frame::Video) -> Result<VideoFrame> {
         let (w, h, fmt) = (raw.width(), raw.height(), raw.format());
-        let needs_new = !matches!(&self.scaler, Some((f, sw, sh, _)) if *f == fmt && *sw == w && *sh == h);
+        let needs_new =
+            !matches!(&self.scaler, Some((f, sw, sh, _)) if *f == fmt && *sw == w && *sh == h);
         if needs_new {
             let scaler = Scaler::get(fmt, w, h, Pixel::RGBA, w, h, Flags::BILINEAR)?;
             self.scaler = Some((fmt, w, h, scaler));
@@ -279,7 +281,12 @@ impl VideoDecoder {
         }
         let pts_secs = self.pts_secs(raw);
         let (data, w, h) = rotate_rgba(data, w, h, self.info.rotation);
-        Ok(VideoFrame { width: w, height: h, pts_secs, data })
+        Ok(VideoFrame {
+            width: w,
+            height: h,
+            pts_secs,
+            data,
+        })
     }
 
     /// Decode the next frame, or `None` at the end of the stream.
@@ -340,7 +347,12 @@ impl VideoDecoder {
 
     /// Low-level seek used by [`seek`](Self::seek) and its retry logic.
     fn reseek(&mut self, secs: f64) -> Result<()> {
-        seek_on_stream(&mut self.ictx, self.stream_index, self.time_base, secs + self.origin_secs)?;
+        seek_on_stream(
+            &mut self.ictx,
+            self.stream_index,
+            self.time_base,
+            secs + self.origin_secs,
+        )?;
         self.decoder.flush();
         self.eof_sent = false;
         self.held = None;
@@ -409,14 +421,16 @@ impl AudioDecoder {
     pub fn open(path: impl AsRef<Path>, options: AudioOptions) -> Result<Self> {
         let path = path.as_ref();
         let ictx = open_input(path)?;
-        let stream = ictx.streams().best(Type::Audio).ok_or(Error::NoStream("audio"))?;
+        let stream = ictx
+            .streams()
+            .best(Type::Audio)
+            .ok_or(Error::NoStream("audio"))?;
         let index = stream.index();
         let time_base = stream.time_base();
         let origin_secs = start_offset_secs(&stream);
 
         let ctx = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?;
         let decoder = ctx.decoder().audio()?;
-        drop(stream);
 
         let in_layout = if decoder.channel_layout().is_empty() {
             ffmpeg::ChannelLayout::default(i32::from(decoder.channels()))
@@ -476,7 +490,10 @@ impl AudioDecoder {
     /// frame, and an empty frame defaults to the input's sample count. When the
     /// rate goes up, that silently leaves samples stuck inside the resampler.
     fn alloc_out(&self, in_samples: usize) -> ffmpeg::frame::Audio {
-        let delay = self.resampler.delay().map_or(0, |d| d.output.max(0) as usize);
+        let delay = self
+            .resampler
+            .delay()
+            .map_or(0, |d| d.output.max(0) as usize);
         let scaled = in_samples as u64 * u64::from(self.out_rate) / u64::from(self.in_rate.max(1));
         let wanted = delay + scaled as usize + 64;
         let mut out = ffmpeg::frame::Audio::new(
@@ -553,7 +570,10 @@ impl AudioDecoder {
                 Err(ffmpeg::Error::Eof) => {
                     let mut out = self.alloc_out(0);
                     if self.resampler.flush(&mut out).is_ok() {
-                        let pts = self.queue.back().map_or(0.0, |b| b.pts_secs + b.duration_secs());
+                        let pts = self
+                            .queue
+                            .back()
+                            .map_or(0.0, |b| b.pts_secs + b.duration_secs());
                         self.push_resampled(pts, &out);
                     }
                     self.flushed = true;
@@ -591,7 +611,12 @@ impl AudioDecoder {
     /// Seek so the next buffer starts at (or just after) `secs`.
     pub fn seek(&mut self, secs: f64) -> Result<()> {
         let secs = secs.max(0.0);
-        seek_on_stream(&mut self.ictx, self.stream_index, self.time_base, secs + self.origin_secs)?;
+        seek_on_stream(
+            &mut self.ictx,
+            self.stream_index,
+            self.time_base,
+            secs + self.origin_secs,
+        )?;
         self.decoder.flush();
         self.queue.clear();
         self.eof_sent = false;

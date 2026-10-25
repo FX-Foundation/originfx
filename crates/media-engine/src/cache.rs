@@ -180,7 +180,9 @@ impl FrameReader {
             let Some(frame) = self.decoder.next_frame()? else {
                 // End of stream: the last frame we produced is the final frame.
                 let Some(next) = self.next_index.filter(|&n| n > 0) else {
-                    return Err(Error::InvalidArgument(format!("frame {index} is past the end of the stream")));
+                    return Err(Error::InvalidArgument(format!(
+                        "frame {index} is past the end of the stream"
+                    )));
                 };
                 let last = next - 1;
                 self.last_index = Some(last);
@@ -206,4 +208,3 @@ impl FrameReader {
         }
     }
 }
-

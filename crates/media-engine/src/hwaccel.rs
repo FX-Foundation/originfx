@@ -68,14 +68,25 @@ pub fn probe_backends() -> Vec<HwBackend> {
             let name = CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
 
             let mut ctx: *mut ffmpeg::ffi::AVBufferRef = ptr::null_mut();
-            let ret = ffmpeg::ffi::av_hwdevice_ctx_create(&mut ctx, kind, ptr::null(), ptr::null_mut(), 0);
+            let ret = ffmpeg::ffi::av_hwdevice_ctx_create(
+                &mut ctx,
+                kind,
+                ptr::null(),
+                ptr::null_mut(),
+                0,
+            );
             let (usable, error) = if ret >= 0 {
                 ffmpeg::ffi::av_buffer_unref(&mut ctx);
                 (true, None)
             } else {
                 (false, Some(error_text(ret)))
             };
-            out.push(HwBackend { vendor: vendor_of(&name), name, usable, error });
+            out.push(HwBackend {
+                vendor: vendor_of(&name),
+                name,
+                usable,
+                error,
+            });
         }
     }
     out
@@ -90,13 +101,22 @@ pub fn usable_backends() -> Vec<HwBackend> {
 /// (`h264_nvenc`, `hevc_vaapi`, ...). Presence does not mean a device works.
 pub fn hardware_codecs() -> Vec<String> {
     crate::init();
-    const SUFFIXES: [&str; 6] = ["_nvenc", "_vaapi", "_qsv", "_videotoolbox", "_amf", "_cuvid"];
+    const SUFFIXES: [&str; 6] = [
+        "_nvenc",
+        "_vaapi",
+        "_qsv",
+        "_videotoolbox",
+        "_amf",
+        "_cuvid",
+    ];
     const CODECS: [&str; 5] = ["h264", "hevc", "av1", "vp9", "mpeg2video"];
     let mut found = Vec::new();
     for codec in CODECS {
         for suffix in SUFFIXES {
             let name = format!("{codec}{suffix}");
-            if ffmpeg::encoder::find_by_name(&name).is_some() || ffmpeg::decoder::find_by_name(&name).is_some() {
+            if ffmpeg::encoder::find_by_name(&name).is_some()
+                || ffmpeg::decoder::find_by_name(&name).is_some()
+            {
                 found.push(name);
             }
         }

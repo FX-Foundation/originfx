@@ -14,7 +14,11 @@ use media_engine::{
 };
 
 #[derive(Parser)]
-#[command(name = "originfx", version, about = "OriginFX engines on the command line")]
+#[command(
+    name = "originfx",
+    version,
+    about = "OriginFX engines on the command line"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -125,9 +129,19 @@ fn run(cmd: Command) -> CliResult {
                 print_info(&info);
             }
         }
-        Command::Convert { input, output, preset, quality, height, fps, video_kbps, audio_kbps } => {
+        Command::Convert {
+            input,
+            output,
+            preset,
+            quality,
+            height,
+            fps,
+            video_kbps,
+            audio_kbps,
+        } => {
             let preset = match preset {
-                Some(id) => ExportPreset::from_id(&id).ok_or_else(|| format!("unknown preset '{id}', try `originfx presets`"))?,
+                Some(id) => ExportPreset::from_id(&id)
+                    .ok_or_else(|| format!("unknown preset '{id}', try `originfx presets`"))?,
                 None => preset_from_extension(&output)?,
             };
             let mut s = ExportSettings::new(preset).quality(quality.into());
@@ -140,7 +154,12 @@ fn run(cmd: Command) -> CliResult {
             let report = media_engine::export_with_progress(&input, &output, &s, |p| {
                 if tty {
                     match p.fraction() {
-                        Some(f) => eprint!("\r{:>5.1}%  {:>7.1}s  {} frames   ", f * 100.0, p.position_secs, p.frames),
+                        Some(f) => eprint!(
+                            "\r{:>5.1}%  {:>7.1}s  {} frames   ",
+                            f * 100.0,
+                            p.position_secs,
+                            p.frames
+                        ),
                         None => eprint!("\r{:>7.1}s  {} frames   ", p.position_secs, p.frames),
                     }
                     let _ = std::io::stderr().flush();
@@ -164,29 +183,60 @@ fn run(cmd: Command) -> CliResult {
         Command::Presets => {
             println!("{:<18} {:<5} {:<30} available", "id", "ext", "description");
             for p in ExportPreset::ALL {
-                println!("{:<18} {:<5} {:<30} {}", p.id(), p.extension(), p.label(), if p.is_available() { "yes" } else { "no (encoder missing)" });
+                println!(
+                    "{:<18} {:<5} {:<30} {}",
+                    p.id(),
+                    p.extension(),
+                    p.label(),
+                    if p.is_available() {
+                        "yes"
+                    } else {
+                        "no (encoder missing)"
+                    }
+                );
             }
         }
         Command::Frame { file, at, out } => {
             let mut reader = FrameReader::open(&file, 256 * 1024 * 1024)?;
             let frame = reader.frame_at(at)?;
             png::write_rgba(&out, frame.width, frame.height, &frame.data)?;
-            println!("saved {}x{} frame at {:.3}s to {}", frame.width, frame.height, frame.pts_secs, out.display());
+            println!(
+                "saved {}x{} frame at {:.3}s to {}",
+                frame.width,
+                frame.height,
+                frame.pts_secs,
+                out.display()
+            );
         }
         Command::Proxy { file, dir, height } => {
-            let pm = ProxyManager::new(dir).with_settings(ProxySettings { height, ..ProxySettings::default() });
+            let pm = ProxyManager::new(dir).with_settings(ProxySettings {
+                height,
+                ..ProxySettings::default()
+            });
             let existed = pm.existing(&file).is_some();
             let path = pm.ensure(&file)?;
-            println!("{} proxy: {}", if existed { "existing" } else { "created" }, path.display());
+            println!(
+                "{} proxy: {}",
+                if existed { "existing" } else { "created" },
+                path.display()
+            );
         }
         Command::Hw => print_hw(),
-        Command::Bench { file, frames, seeks } => bench(&file, frames, seeks)?,
+        Command::Bench {
+            file,
+            frames,
+            seeks,
+        } => bench(&file, frames, seeks)?,
     }
     Ok(())
 }
 
 fn preset_from_extension(path: &Path) -> Result<ExportPreset, Error> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     Ok(match ext.as_str() {
         "mp4" | "m4v" => ExportPreset::Mp4H264,
         "mov" => ExportPreset::MovH264,
@@ -199,7 +249,11 @@ fn preset_from_extension(path: &Path) -> Result<ExportPreset, Error> {
         "wav" => ExportPreset::Wav,
         "flac" => ExportPreset::Flac,
         "ogg" | "opus" => ExportPreset::OpusOgg,
-        _ => return Err(Error::InvalidArgument(format!("cannot guess a preset from extension '.{ext}'; pass --preset"))),
+        _ => {
+            return Err(Error::InvalidArgument(format!(
+                "cannot guess a preset from extension '.{ext}'; pass --preset"
+            )))
+        }
     })
 }
 
@@ -211,12 +265,21 @@ fn human_bytes(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[i]) }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[i])
+    }
 }
 
 fn fmt_duration(secs: f64) -> String {
     let total = secs.round() as u64;
-    format!("{:02}:{:02}:{:02}", total / 3600, (total / 60) % 60, total % 60)
+    format!(
+        "{:02}:{:02}:{:02}",
+        total / 3600,
+        (total / 60) % 60,
+        total % 60
+    )
 }
 
 fn print_info(info: &MediaInfo) {
@@ -233,7 +296,9 @@ fn print_info(info: &MediaInfo) {
         println!("  bit rate  : {} kbit/s", b / 1000);
     }
     for v in &info.video {
-        let fps = v.frame_rate.map_or("?".to_string(), |r| format!("{:.3}", r.as_f64()));
+        let fps = v
+            .frame_rate
+            .map_or("?".to_string(), |r| format!("{:.3}", r.as_f64()));
         println!(
             "  video #{:<2} : {} {}x{} {} fps, {}{}{}",
             v.index,
@@ -243,7 +308,16 @@ fn print_info(info: &MediaInfo) {
             fps,
             v.pixel_format,
             v.frames.map_or(String::new(), |n| format!(", {n} frames")),
-            if v.rotation != 0 { format!(", rotated {}° (shows as {}x{})", v.rotation, v.display_width(), v.display_height()) } else { String::new() }
+            if v.rotation != 0 {
+                format!(
+                    ", rotated {}° (shows as {}x{})",
+                    v.rotation,
+                    v.display_width(),
+                    v.display_height()
+                )
+            } else {
+                String::new()
+            }
         );
     }
     for a in &info.audio {
@@ -253,11 +327,20 @@ fn print_info(info: &MediaInfo) {
             a.codec,
             a.sample_rate,
             a.channels,
-            a.language.as_deref().map_or(String::new(), |l| format!(", {l}"))
+            a.language
+                .as_deref()
+                .map_or(String::new(), |l| format!(", {l}"))
         );
     }
     for s in &info.subtitles {
-        println!("  subs  #{:<2} : {}{}", s.index, s.codec, s.language.as_deref().map_or(String::new(), |l| format!(", {l}")));
+        println!(
+            "  subs  #{:<2} : {}{}",
+            s.index,
+            s.codec,
+            s.language
+                .as_deref()
+                .map_or(String::new(), |l| format!(", {l}"))
+        );
     }
 }
 
@@ -331,7 +414,11 @@ fn info_json(i: &MediaInfo) -> String {
             )
         })
         .collect();
-    let meta: Vec<String> = i.metadata.iter().map(|(k, v)| format!("{}:{}", json_str(k), json_str(v))).collect();
+    let meta: Vec<String> = i
+        .metadata
+        .iter()
+        .map(|(k, v)| format!("{}:{}", json_str(k), json_str(v)))
+        .collect();
     format!(
         "{{\"path\":{},\"format\":{},\"format_long\":{},\"size_bytes\":{},\"duration_secs\":{},\"bit_rate\":{},\"video\":[{}],\"audio\":[{}],\"subtitles\":[{}],\"metadata\":{{{}}}}}",
         json_str(&i.path.to_string_lossy()),
@@ -361,8 +448,17 @@ fn print_hw() {
         }
     }
     let codecs = hwaccel::hardware_codecs();
-    println!("hardware codecs in this FFmpeg: {}", if codecs.is_empty() { "none".to_string() } else { codecs.join(", ") });
-    println!("note: the engine does not use GPU decode/encode yet; this only reports what is available.");
+    println!(
+        "hardware codecs in this FFmpeg: {}",
+        if codecs.is_empty() {
+            "none".to_string()
+        } else {
+            codecs.join(", ")
+        }
+    );
+    println!(
+        "note: the engine does not use GPU decode/encode yet; this only reports what is available."
+    );
 }
 
 fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
@@ -380,7 +476,10 @@ fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
         n += 1;
     }
     let secs = start.elapsed().as_secs_f64().max(1e-9);
-    println!("sequential decode (incl. RGBA convert): {n} frames in {secs:.2}s = {:.1} fps", n as f64 / secs);
+    println!(
+        "sequential decode (incl. RGBA convert): {n} frames in {secs:.2}s = {:.1} fps",
+        n as f64 / secs
+    );
 
     if seeks > 0 {
         let dur = info.duration_secs.unwrap_or(0.0);
@@ -392,7 +491,10 @@ fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
                 reader.frame_at(t)?;
             }
             let secs = start.elapsed().as_secs_f64();
-            println!("random access: {seeks} seeks in {secs:.2}s = {:.1} ms per frame", secs * 1000.0 / f64::from(seeks));
+            println!(
+                "random access: {seeks} seeks in {secs:.2}s = {:.1} ms per frame",
+                secs * 1000.0 / f64::from(seeks)
+            );
         }
     }
     Ok(())

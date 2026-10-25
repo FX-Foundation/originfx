@@ -27,7 +27,10 @@ pub struct ProxySettings {
 
 impl Default for ProxySettings {
     fn default() -> Self {
-        Self { height: 540, keyint: 12 }
+        Self {
+            height: 540,
+            keyint: 12,
+        }
     }
 }
 
@@ -52,7 +55,10 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 impl ProxyManager {
     /// Proxies are stored in `dir` (created on first use).
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into(), settings: ProxySettings::default() }
+        Self {
+            dir: dir.into(),
+            settings: ProxySettings::default(),
+        }
     }
 
     pub fn with_settings(mut self, settings: ProxySettings) -> Self {
@@ -94,10 +100,18 @@ impl ProxyManager {
             .unwrap_or_else(|| "media".into());
         let stem: String = stem
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .take(48)
             .collect();
-        Ok(self.dir.join(format!("{stem}-{:016x}.proxy.mp4", fnv1a(&key))))
+        Ok(self
+            .dir
+            .join(format!("{stem}-{:016x}.proxy.mp4", fnv1a(&key))))
     }
 
     /// The proxy for `source` if it has already been generated.
@@ -165,11 +179,18 @@ impl ProxyManager {
             .filter_map(|s| self.proxy_path(s).ok())
             .collect();
         let mut removed = 0;
-        let Ok(entries) = std::fs::read_dir(&self.dir) else { return Ok(0) };
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return Ok(0);
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            if (name.ends_with(".proxy.mp4") || name.ends_with(".partial.mp4")) && !keep.contains(&path) {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if (name.ends_with(".proxy.mp4") || name.ends_with(".partial.mp4"))
+                && !keep.contains(&path)
+            {
                 std::fs::remove_file(&path)?;
                 removed += 1;
             }

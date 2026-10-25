@@ -10,7 +10,7 @@ fn probe_reports_streams() {
     let clip = pattern_clip(&dir, "p.mp4", "320x180", 25, 2);
     let info = probe(&clip).unwrap();
 
-    assert_eq!(info.format_name.contains("mp4"), true);
+    assert!(info.format_name.contains("mp4"));
     assert!((info.duration_secs.unwrap() - 2.0).abs() < 0.2);
     let v = info.primary_video().unwrap();
     assert_eq!((v.width, v.height), (320, 180));
@@ -48,7 +48,11 @@ fn sequential_decode_returns_every_frame_in_order() {
     while let Some(f) = dec.next_frame().unwrap() {
         assert_eq!((f.width, f.height), (64, 64));
         assert_eq!(f.data.len(), 64 * 64 * 4);
-        assert_eq!(frame_number(&f.data), n, "frame {n} decoded as wrong content");
+        assert_eq!(
+            frame_number(&f.data),
+            n,
+            "frame {n} decoded as wrong content"
+        );
         assert!(f.pts_secs > last_pts, "pts must increase");
         last_pts = f.pts_secs;
         n += 1;
@@ -63,7 +67,9 @@ fn seek_is_frame_accurate_everywhere() {
     let mut dec = VideoDecoder::open(&clip).unwrap();
     // Includes keyframe boundaries (0, 15, 30, 45), just before/after them,
     // backwards jumps, and the final frame.
-    for &n in &[0i64, 1, 14, 15, 16, 29, 30, 44, 45, 58, 59, 20, 3, 59, 0, 33] {
+    for &n in &[
+        0i64, 1, 14, 15, 16, 29, 30, 44, 45, 58, 59, 20, 3, 59, 0, 33,
+    ] {
         let t = n as f64 / 30.0 + 0.004; // a hair after the frame start
         let f = dec.frame_at(t).unwrap().expect("frame");
         assert_eq!(frame_number(&f.data), n, "seeking to frame {n}");
@@ -90,12 +96,26 @@ fn decoder_without_video_reports_no_stream() {
     let wav = dir.join("tone.wav");
     if !wav.exists() {
         let ok = std::process::Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-                   "sine=frequency=440:duration=1", wav.to_str().unwrap()])
-            .status().unwrap().success();
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                wav.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success();
         assert!(ok);
     }
-    assert!(matches!(VideoDecoder::open(&wav), Err(Error::NoStream("video"))));
+    assert!(matches!(
+        VideoDecoder::open(&wav),
+        Err(Error::NoStream("video"))
+    ));
     assert!(AudioDecoder::open(&wav, AudioOptions::default()).is_ok());
 }
 
@@ -116,7 +136,10 @@ fn frame_reader_random_access_and_cache() {
         assert_eq!(frame_number(&r.frame(n).unwrap().data), n as i64);
     }
     let after = r.cache_stats();
-    assert!(after.hits >= before.hits + 10, "expected cache hits: {before:?} -> {after:?}");
+    assert!(
+        after.hits >= before.hits + 10,
+        "expected cache hits: {before:?} -> {after:?}"
+    );
 
     // Past the end clamps to the last frame.
     assert_eq!(frame_number(&r.frame(10_000).unwrap().data), 59);
@@ -144,7 +167,10 @@ fn audio_decodes_to_requested_format() {
     let clip = id_clip(&scratch("audio"));
     let mut dec = AudioDecoder::open(
         &clip,
-        AudioOptions { sample_rate: Some(48000), channels: Some(2) },
+        AudioOptions {
+            sample_rate: Some(48000),
+            channels: Some(2),
+        },
     )
     .unwrap();
     let all = dec.read_all().unwrap();
@@ -164,8 +190,16 @@ fn audio_seek_skips_ahead() {
     let mut dec = AudioDecoder::open(&clip, AudioOptions::default()).unwrap();
     dec.seek(1.5).unwrap();
     let rest = dec.read_all().unwrap();
-    assert!((rest.pts_secs - 1.5).abs() < 0.05, "starts at {}", rest.pts_secs);
-    assert!((rest.duration_secs() - 0.5).abs() < 0.15, "len {}", rest.duration_secs());
+    assert!(
+        (rest.pts_secs - 1.5).abs() < 0.05,
+        "starts at {}",
+        rest.pts_secs
+    );
+    assert!(
+        (rest.duration_secs() - 0.5).abs() < 0.15,
+        "len {}",
+        rest.duration_secs()
+    );
 }
 
 /// Phones film portrait video as landscape pixels plus a rotation flag.
@@ -174,9 +208,22 @@ fn rotated_clip(dir: &std::path::Path, degrees: u32) -> std::path::PathBuf {
     let out = dir.join(format!("rot{degrees}.mp4"));
     if !out.exists() {
         let ok = std::process::Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-display_rotation", &degrees.to_string(),
-                   "-i", src.to_str().unwrap(), "-c", "copy", out.to_str().unwrap()])
-            .status().unwrap().success();
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-display_rotation",
+                &degrees.to_string(),
+                "-i",
+                src.to_str().unwrap(),
+                "-c",
+                "copy",
+                out.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success();
         assert!(ok);
     }
     out
@@ -194,17 +241,31 @@ fn rotation_flag_is_probed_decoded_and_exported() {
     assert_eq!(v.rotation, 270);
     assert_eq!((v.display_width(), v.display_height()), (180, 320));
 
-    let f = VideoDecoder::open(&clip).unwrap().next_frame().unwrap().unwrap();
-    assert_eq!((f.width, f.height), (180, 320), "decoder returns upright frames");
+    let f = VideoDecoder::open(&clip)
+        .unwrap()
+        .next_frame()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (f.width, f.height),
+        (180, 320),
+        "decoder returns upright frames"
+    );
 
     // Export bakes the rotation in and leaves no rotation flag behind.
     let out = dir.join("upright.mp4");
-    media_engine::export(&clip, &out, &media_engine::ExportSettings::new(media_engine::ExportPreset::Mp4H264).quality(media_engine::Quality::Draft)).unwrap();
+    media_engine::export(
+        &clip,
+        &out,
+        &media_engine::ExportSettings::new(media_engine::ExportPreset::Mp4H264)
+            .quality(media_engine::Quality::Draft),
+    )
+    .unwrap();
     let o = probe(&out).unwrap();
     let ov = o.primary_video().unwrap();
     assert_eq!((ov.width, ov.height, ov.rotation), (180, 320, 0));
 
     // And an unrotated clip is untouched.
-    let plain = probe(&pattern_clip(&dir, "landscape.mp4", "320x180", 25, 2)).unwrap();
+    let plain = probe(pattern_clip(&dir, "landscape.mp4", "320x180", 25, 2)).unwrap();
     assert_eq!(plain.primary_video().unwrap().rotation, 0);
 }

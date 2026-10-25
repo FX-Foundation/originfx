@@ -136,14 +136,19 @@ impl ExportPreset {
 
     /// Look a preset up by its [`id`](Self::id).
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.id().eq_ignore_ascii_case(id))
+        Self::ALL
+            .into_iter()
+            .find(|p| p.id().eq_ignore_ascii_case(id))
     }
 
     /// File extension (without the dot) outputs of this preset should use.
     pub fn extension(self) -> &'static str {
         match self {
             Self::Mp4H264 | Self::Mp4H265 => "mp4",
-            Self::MovH264 | Self::MovProRes422 | Self::MovProRes422Hq | Self::MovProRes4444
+            Self::MovH264
+            | Self::MovProRes422
+            | Self::MovProRes422Hq
+            | Self::MovProRes4444
             | Self::MovDnxhrHq => "mov",
             Self::MkvH264 | Self::MkvH265 => "mkv",
             Self::WebmVp9 | Self::WebmVp8 | Self::WebmAv1 => "webm",
@@ -161,7 +166,10 @@ impl ExportPreset {
     pub(crate) fn muxer(self) -> &'static str {
         match self {
             Self::Mp4H264 | Self::Mp4H265 => "mp4",
-            Self::MovH264 | Self::MovProRes422 | Self::MovProRes422Hq | Self::MovProRes4444
+            Self::MovH264
+            | Self::MovProRes422
+            | Self::MovProRes422Hq
+            | Self::MovProRes4444
             | Self::MovDnxhrHq => "mov",
             Self::MkvH264 | Self::MkvH265 => "matroska",
             Self::WebmVp9 | Self::WebmVp8 | Self::WebmAv1 => "webm",
@@ -193,21 +201,30 @@ impl ExportPreset {
     }
 
     pub(crate) fn audio(self) -> Option<AudioSpec> {
-        let (encoders, fixed_rate, lossy): (&'static [&'static str], Option<u32>, bool) = match self {
+        let (encoders, fixed_rate, lossy): (&'static [&'static str], Option<u32>, bool) = match self
+        {
             Self::Mp4H264 | Self::Mp4H265 | Self::MovH264 | Self::MkvH264 | Self::MkvH265 => {
                 (&["aac"], None, true)
             }
             Self::WebmVp9 | Self::WebmVp8 | Self::WebmAv1 | Self::OpusOgg => {
                 (&["libopus"], Some(48_000), true)
             }
-            Self::MovProRes422 | Self::MovProRes422Hq | Self::MovProRes4444 | Self::MovDnxhrHq
-            | Self::AviMjpeg | Self::Wav => (&["pcm_s16le"], None, false),
+            Self::MovProRes422
+            | Self::MovProRes422Hq
+            | Self::MovProRes4444
+            | Self::MovDnxhrHq
+            | Self::AviMjpeg
+            | Self::Wav => (&["pcm_s16le"], None, false),
             Self::Mp3 => (&["libmp3lame"], None, true),
             Self::AacM4a => (&["aac"], None, true),
             Self::Flac => (&["flac"], None, false),
             Self::Gif => return None,
         };
-        Some(AudioSpec { encoders, fixed_rate, lossy })
+        Some(AudioSpec {
+            encoders,
+            fixed_rate,
+            lossy,
+        })
     }
 
     /// True for presets that need a video stream in the input.
@@ -240,7 +257,9 @@ impl ExportPreset {
 }
 
 /// First encoder from `names` that this FFmpeg build contains.
-pub(crate) fn find_encoder(names: &'static [&'static str]) -> Result<(ffmpeg::Codec, &'static str)> {
+pub(crate) fn find_encoder(
+    names: &'static [&'static str],
+) -> Result<(ffmpeg::Codec, &'static str)> {
     for &name in names {
         if let Some(codec) = ffmpeg::encoder::find_by_name(name) {
             return Ok((codec, name));
