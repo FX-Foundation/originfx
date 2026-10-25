@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.mp4
+*.mkv
+*.mov
+*.webm

@@ -1,0 +1,16 @@
+[package]
+name = "originfx-cli"
+description = "Command line front-end for the OriginFX engines"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "originfx"
+path = "src/main.rs"
+
+[dependencies]
+originfx-media-engine = { path = "../media-engine" }
+clap = { version = "4", features = ["derive"] }
