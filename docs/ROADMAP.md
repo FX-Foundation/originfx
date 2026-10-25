@@ -25,9 +25,10 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
 
 * **Colour management.** Decode converts YUV to RGBA with FFmpeg's defaults
   (BT.601, limited range assumed). HD/UHD footage mastered as BT.709 or HDR
-  will look slightly off in `FrameReader` output. Export keeps colour tags
-  intact. Proper colour management belongs in the Render Engine; the decoder
-  should then hand over native YUV plus colour metadata instead of RGBA.
+  will look slightly off in `FrameReader` output, and exports do not yet write
+  explicit colour tags (primaries, transfer, range). Proper colour management
+  belongs in the Render Engine; the decoder should then hand over native YUV
+  plus colour metadata instead of RGBA.
 * **Variable frame rate.** `FrameReader` maps time to frame index with the
   nominal frame rate, which is exact for constant-rate footage and approximate
   for VFR. Export always conforms to constant frame rate.
