@@ -60,6 +60,12 @@ enum Command {
         /// Keep only the clip up to this time (seconds).
         #[arg(long)]
         end: Option<f64>,
+        /// Use this video stream (index from `probe`).
+        #[arg(long)]
+        video_stream: Option<usize>,
+        /// Use this audio track (index from `probe`).
+        #[arg(long)]
+        audio_stream: Option<usize>,
     },
     /// List export presets and whether this machine's FFmpeg can produce them.
     Presets,
@@ -146,6 +152,8 @@ fn run(cmd: Command) -> CliResult {
             audio_kbps,
             start,
             end,
+            video_stream,
+            audio_stream,
         } => {
             let preset = match preset {
                 Some(id) => ExportPreset::from_id(&id)
@@ -159,6 +167,8 @@ fn run(cmd: Command) -> CliResult {
             s.audio_bitrate = audio_kbps.map(|k| k * 1000);
             s.start_secs = start;
             s.end_secs = end;
+            s.video_stream = video_stream;
+            s.audio_stream = audio_stream;
 
             let tty = std::io::stderr().is_terminal();
             let report = media_engine::export_with_progress(&input, &output, &s, |p| {

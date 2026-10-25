@@ -31,6 +31,8 @@ pub(crate) struct AudioSpec {
     pub fixed_rate: Option<u32>,
     /// Lossless / PCM codecs ignore bitrate.
     pub lossy: bool,
+    /// Most channels the format can carry (2 = stereo only).
+    pub max_channels: u16,
 }
 
 /// A ready-made output format.
@@ -220,10 +222,15 @@ impl ExportPreset {
             Self::Flac => (&["flac"], None, false),
             Self::Gif => return None,
         };
+        let max_channels = match self {
+            Self::Mp3 => 2,
+            _ => 8,
+        };
         Some(AudioSpec {
             encoders,
             fixed_rate,
             lossy,
+            max_channels,
         })
     }
 

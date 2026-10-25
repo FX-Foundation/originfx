@@ -72,12 +72,11 @@ fn every_available_preset_produces_a_valid_file() {
             }
             None => assert!(info.audio.is_empty(), "{}: unexpected audio", preset.id()),
         }
-        // FLAC written through this pipeline has no total-sample count in its header,
-        // so FFmpeg cannot report its duration; every other format must.
-        match info.duration_secs {
-            Some(d) => assert!((d - 2.0).abs() < 0.35, "{}: duration {d}", preset.id()),
-            None => assert_eq!(preset, ExportPreset::Flac, "{}: no duration", preset.id()),
-        }
+        // Every format, FLAC included, must report its length.
+        let d = info
+            .duration_secs
+            .unwrap_or_else(|| panic!("{}: no duration", preset.id()));
+        assert!((d - 2.0).abs() < 0.35, "{}: duration {d}", preset.id());
         tested += 1;
     }
     assert!(tested >= 10, "only {tested} presets could be tested");
@@ -363,4 +362,25 @@ fn trim_rejects_nonsense_ranges() {
             "{s:?}..{e:?} gave {r:?}"
         );
     }
+}
+
+#[test]
+fn long_gifs_export_with_a_streaming_palette() {
+    require_ffmpeg!();
+    if !ExportPreset::Gif.is_available() {
+        return;
+    }
+    let dir = scratch("gif-long");
+    let src = pattern_clip(&dir, "long.mp4", "160x90", 10, 25); // over the 20 s threshold
+    let out = dir.join("long.gif");
+    let _ = std::fs::remove_file(&out);
+    let report = export(
+        &src,
+        &out,
+        &ExportSettings::new(ExportPreset::Gif).quality(Quality::Draft),
+    )
+    .unwrap();
+    assert_eq!(report.frames, 25 * 10);
+    let v = probe(&out).unwrap().video[0].clone();
+    assert_eq!(v.codec, "gif");
 }
