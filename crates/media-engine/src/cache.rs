@@ -7,6 +7,7 @@ use lru::LruCache;
 
 use crate::decode::VideoDecoder;
 use crate::error::{Error, Result};
+use crate::index::FrameIndex;
 use crate::types::VideoFrame;
 
 /// Hit/miss counters, handy for tuning and tests.
@@ -107,13 +108,16 @@ const MAX_FORWARD_DECODE: u64 = 30;
 
 /// Random-access frame reader: a [`VideoDecoder`] fronted by a [`FrameCache`].
 ///
-/// Frames are addressed by index (`time * fps`). Variable-frame-rate files are
-/// mapped through their nominal frame rate, which is exact for constant rate
-/// footage and consistent (but approximate) for VFR.
+/// Frames are addressed by index. For constant-frame-rate footage the index is
+/// `time * fps`. When the container reports a variable frame rate, the reader
+/// reads every frame's timestamp up front ([`FrameIndex`]) so lookups stay
+/// exact; use [`FrameReader::open_exact`] to force that for any file.
 pub struct FrameReader {
     decoder: VideoDecoder,
     cache: FrameCache,
     fps: f64,
+    /// Exact frame times; only built for variable-frame-rate footage.
+    index: Option<FrameIndex>,
     /// Index of the frame the decoder will produce next, if known.
     next_index: Option<u64>,
     /// Index of the final frame once end of stream has been seen.
@@ -123,15 +127,50 @@ pub struct FrameReader {
 impl FrameReader {
     /// Open `path` with a cache of `cache_bytes`.
     pub fn open(path: impl AsRef<Path>, cache_bytes: usize) -> Result<Self> {
+        Self::open_inner(path.as_ref(), cache_bytes, false)
+    }
+
+    /// Like [`open`](Self::open) but always reads the exact frame times first.
+    /// Costs one pass over the file; worth it when frame accuracy matters.
+    pub fn open_exact(path: impl AsRef<Path>, cache_bytes: usize) -> Result<Self> {
+        Self::open_inner(path.as_ref(), cache_bytes, true)
+    }
+
+    fn open_inner(path: &Path, cache_bytes: usize, force_index: bool) -> Result<Self> {
         let decoder = VideoDecoder::open(path)?;
         let fps = decoder.fps();
+        let stream = decoder.info().index;
+        let index = if force_index || FrameIndex::looks_variable(path, stream) {
+            Some(FrameIndex::build(path, stream)?)
+        } else {
+            None
+        };
         Ok(Self {
             decoder,
             cache: FrameCache::new(cache_bytes),
             fps,
+            index,
             next_index: Some(0),
             last_index: None,
         })
+    }
+
+    /// The exact frame timeline, when one was built.
+    pub fn frame_index(&self) -> Option<&FrameIndex> {
+        self.index.as_ref()
+    }
+
+    /// Total number of frames, when known exactly (needs the frame index).
+    pub fn frame_count(&self) -> Option<u64> {
+        self.index.as_ref().map(FrameIndex::len)
+    }
+
+    /// Display time of frame `index` in seconds.
+    pub fn time_of(&self, index: u64) -> f64 {
+        match &self.index {
+            Some(ix) => ix.time_of(index),
+            None => index as f64 / self.fps,
+        }
     }
 
     pub fn decoder(&self) -> &VideoDecoder {
@@ -152,7 +191,10 @@ impl FrameReader {
 
     /// Index of the frame on screen at `secs`.
     pub fn index_at(&self, secs: f64) -> u64 {
-        (secs.max(0.0) * self.fps + 1e-6).floor() as u64
+        match &self.index {
+            Some(ix) => ix.index_at(secs),
+            None => (secs.max(0.0) * self.fps + 1e-6).floor() as u64,
+        }
     }
 
     /// Frame displayed at time `secs`.
@@ -164,6 +206,10 @@ impl FrameReader {
     /// Frame number `index` (0-based). Past the end it returns the last frame.
     pub fn frame(&mut self, index: u64) -> Result<Arc<VideoFrame>> {
         let index = self.last_index.map_or(index, |last| index.min(last));
+        let index = self
+            .index
+            .as_ref()
+            .map_or(index, |ix| index.min(ix.len() - 1));
         if let Some(f) = self.cache.get(index) {
             return Ok(f);
         }
@@ -171,7 +217,11 @@ impl FrameReader {
         let forward_ok = matches!(self.next_index, Some(next) if index >= next && index - next <= MAX_FORWARD_DECODE);
         if !forward_ok {
             // Aim a quarter frame past the frame start so rounding never lands on the previous frame.
-            self.decoder.seek((index as f64 + 0.25) / self.fps)?;
+            let target = match &self.index {
+                Some(ix) => ix.time_of(index) + 0.25 * ix.duration_of(index),
+                None => (index as f64 + 0.25) / self.fps,
+            };
+            self.decoder.seek(target)?;
             self.next_index = None;
         }
 
@@ -196,7 +246,10 @@ impl FrameReader {
                 // Sequential decode: trust the running counter (robust to odd timestamps).
                 Some(n) => n,
                 // First frame after a seek: derive from its timestamp.
-                None => (frame.pts_secs.max(0.0) * self.fps + 0.5).floor() as u64,
+                None => match &self.index {
+                    Some(ix) => ix.nearest(frame.pts_secs),
+                    None => (frame.pts_secs.max(0.0) * self.fps + 0.5).floor() as u64,
+                },
             };
             let frame = Arc::new(frame);
             self.cache.insert(idx, Arc::clone(&frame));

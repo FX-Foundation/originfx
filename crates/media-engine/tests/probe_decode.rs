@@ -269,3 +269,50 @@ fn rotation_flag_is_probed_decoded_and_exported() {
     let plain = probe(pattern_clip(&dir, "landscape.mp4", "320x180", 25, 2)).unwrap();
     assert_eq!(plain.primary_video().unwrap().rotation, 0);
 }
+
+/// Id of the last kept frame of `vfr_clip` shown at `t` seconds.
+fn vfr_expected_id(t: f64) -> i64 {
+    (0..60_i64)
+        .filter(|n| n % 10 < 5)
+        .rfind(|n| *n as f64 / 30.0 <= t + 1e-6)
+        .unwrap()
+}
+
+#[test]
+fn variable_frame_rate_lookup_is_exact() {
+    require_ffmpeg!();
+    let dir = scratch("vfr");
+    let src = vfr_clip(&dir);
+    let mut reader = FrameReader::open(&src, 8 << 20).unwrap();
+    assert!(
+        reader.frame_index().is_some(),
+        "a VFR clip should be indexed automatically"
+    );
+    assert_eq!(reader.frame_count(), Some(30));
+
+    // Includes times inside a gap, exactly on a frame, and out of order (seeks).
+    for t in [0.0, 0.1, 0.49, 0.5, 0.667, 1.0, 1.2, 1.9, 0.3, 0.05, 1.5] {
+        let f = reader.frame_at(t).unwrap();
+        assert_eq!(
+            frame_number(&f.data),
+            vfr_expected_id(t),
+            "wrong frame at {t} s"
+        );
+    }
+}
+
+#[test]
+fn constant_frame_rate_needs_no_index_but_exact_mode_agrees() {
+    require_ffmpeg!();
+    let dir = scratch("vfr-cfr");
+    let src = id_clip(&dir);
+    let mut plain = FrameReader::open(&src, 8 << 20).unwrap();
+    assert!(plain.frame_index().is_none());
+    let mut exact = FrameReader::open_exact(&src, 8 << 20).unwrap();
+    assert_eq!(exact.frame_count(), Some(60));
+    for t in [0.0, 0.33, 1.0, 1.97, 0.5] {
+        let a = frame_number(&plain.frame_at(t).unwrap().data);
+        let b = frame_number(&exact.frame_at(t).unwrap().data);
+        assert_eq!(a, b, "plain and exact disagree at {t} s");
+    }
+}

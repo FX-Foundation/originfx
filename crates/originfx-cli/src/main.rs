@@ -54,6 +54,12 @@ enum Command {
         /// Audio bitrate in kbit/s.
         #[arg(long)]
         audio_kbps: Option<u64>,
+        /// Keep only the clip from this time (seconds).
+        #[arg(long)]
+        start: Option<f64>,
+        /// Keep only the clip up to this time (seconds).
+        #[arg(long)]
+        end: Option<f64>,
     },
     /// List export presets and whether this machine's FFmpeg can produce them.
     Presets,
@@ -138,6 +144,8 @@ fn run(cmd: Command) -> CliResult {
             fps,
             video_kbps,
             audio_kbps,
+            start,
+            end,
         } => {
             let preset = match preset {
                 Some(id) => ExportPreset::from_id(&id)
@@ -149,6 +157,8 @@ fn run(cmd: Command) -> CliResult {
             s.fps = fps;
             s.video_bitrate = video_kbps.map(|k| k * 1000);
             s.audio_bitrate = audio_kbps.map(|k| k * 1000);
+            s.start_secs = start;
+            s.end_secs = end;
 
             let tty = std::io::stderr().is_terminal();
             let report = media_engine::export_with_progress(&input, &output, &s, |p| {
@@ -319,6 +329,17 @@ fn print_info(info: &MediaInfo) {
                 String::new()
             }
         );
+        let c = &v.colour;
+        if c.space.is_some() || c.transfer.is_some() {
+            println!(
+                "              colour: {} / {} / {} / {} range{}",
+                c.space.as_deref().unwrap_or("?"),
+                c.primaries.as_deref().unwrap_or("?"),
+                c.transfer.as_deref().unwrap_or("?"),
+                c.range.as_deref().unwrap_or("?"),
+                if c.is_hdr() { "  (HDR)" } else { "" }
+            );
+        }
     }
     for a in &info.audio {
         println!(

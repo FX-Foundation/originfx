@@ -258,3 +258,109 @@ fn missing_input_is_not_found() {
     );
     assert!(matches!(r, Err(Error::NotFound(_))));
 }
+
+#[test]
+fn trim_keeps_exactly_the_requested_frames() {
+    require_ffmpeg!();
+    let dir = scratch("trim");
+    let src = id_clip(&dir); // 60 frames at 30 fps, frame n has green = n * 4
+    let out = dir.join("trim.mp4");
+    let _ = std::fs::remove_file(&out);
+    let report = export(
+        &src,
+        &out,
+        &ExportSettings::new(ExportPreset::Mp4H264)
+            .quality(Quality::High)
+            .trim(Some(0.5), Some(1.5)),
+    )
+    .unwrap();
+    assert_eq!(report.frames, 30, "1 s at 30 fps");
+    assert!(
+        (report.duration_secs - 1.0).abs() < 0.1,
+        "{}",
+        report.duration_secs
+    );
+
+    let mut dec = VideoDecoder::open(&out).unwrap();
+    let mut greens = Vec::new();
+    while let Some(f) = dec.next_frame().unwrap() {
+        greens.push(i32::from(f.data[1]));
+    }
+    assert_eq!(greens.len(), 30);
+    // Source frame 15 is green 60, frame 44 is green 176 (lossy re-encode: allow slack).
+    assert!(
+        (greens[0] - 60).abs() <= 12,
+        "first frame green {}",
+        greens[0]
+    );
+    assert!(
+        (greens[29] - 176).abs() <= 12,
+        "last frame green {}",
+        greens[29]
+    );
+
+    let info = probe(&out).unwrap();
+    assert!((info.duration_secs.unwrap_or(0.0) - 1.0).abs() < 0.15);
+    if let Some(a) = info.audio.first() {
+        assert!((a.duration_secs.unwrap_or(1.0) - 1.0).abs() < 0.2);
+    }
+}
+
+#[test]
+fn trim_with_only_a_start_keeps_the_rest() {
+    require_ffmpeg!();
+    let dir = scratch("trim-start");
+    let src = id_clip(&dir);
+    let out = dir.join("tail.mp4");
+    let _ = std::fs::remove_file(&out);
+    let report = export(
+        &src,
+        &out,
+        &ExportSettings::new(ExportPreset::Mp4H264)
+            .quality(Quality::Draft)
+            .trim(Some(1.0), None),
+    )
+    .unwrap();
+    assert_eq!(report.frames, 30);
+}
+
+#[test]
+fn trim_works_for_audio_only_exports() {
+    require_ffmpeg!();
+    let dir = scratch("trim-audio");
+    let src = id_clip(&dir);
+    let out = dir.join("cut.wav");
+    let _ = std::fs::remove_file(&out);
+    export(
+        &src,
+        &out,
+        &ExportSettings::new(ExportPreset::Wav).trim(Some(0.5), Some(1.5)),
+    )
+    .unwrap();
+    let a = probe(&out).unwrap().audio[0].clone();
+    let d = a.duration_secs.unwrap();
+    assert!((d - 1.0).abs() < 0.1, "wav is {d} s");
+}
+
+#[test]
+fn trim_rejects_nonsense_ranges() {
+    require_ffmpeg!();
+    let dir = scratch("trim-bad");
+    let src = id_clip(&dir);
+    let out = dir.join("bad.mp4");
+    for (s, e) in [
+        (Some(1.0), Some(0.5)),
+        (Some(-1.0), None),
+        (None, Some(0.0)),
+    ] {
+        let r = export(
+            &src,
+            &out,
+            &ExportSettings::new(ExportPreset::Mp4H264).trim(s, e),
+        );
+        assert!(
+            matches!(r, Err(Error::InvalidArgument(_))),
+            "{s:?}..{e:?} gave {r:?}"
+        );
+    }
+}
