@@ -9,6 +9,7 @@ use ffmpeg::software::scaling::{Context as Scaler, Flags};
 use ffmpeg_next as ffmpeg;
 
 use crate::error::{Error, Result};
+use crate::hwaccel::{self, HwMode};
 use crate::probe::{stream_duration_secs, stream_rotation};
 use crate::types::{AudioBuffer, Rational, VideoFrame, VideoStreamInfo};
 
@@ -140,6 +141,13 @@ pub struct VideoDecoder {
     time_base: ffmpeg::Rational,
     origin_secs: f64,
     decoder: ffmpeg::decoder::Video,
+    /// GPU session, if decoding on the GPU. Declared after `decoder` so the
+    /// decoder (which points into it) is dropped first.
+    hw: Option<crate::hwaccel::HwSession>,
+    /// Frames the GPU has produced so far (0 means a failure can still fall back).
+    hw_frames: u64,
+    /// Why GPU decoding was given up on, if it was.
+    hw_fallback: Option<String>,
     scaler: Option<(Pixel, u32, u32, Scaler)>,
     /// Matrix table id and source range the scaler was configured for.
     scaler_colour: Option<(i32, bool)>,
@@ -155,14 +163,86 @@ pub struct VideoDecoder {
     retry_step: f64,
 }
 
+/// Create a video decoder for `stream`, on the GPU when `hw` asks for it.
+/// With `HwMode::Auto`, any GPU problem quietly yields a software decoder.
+fn build_decoder(
+    stream: &ffmpeg::format::stream::Stream,
+    hw: &HwMode,
+) -> Result<(ffmpeg::decoder::Video, Option<hwaccel::HwSession>)> {
+    let attempt = |mode: &HwMode| -> Result<(ffmpeg::decoder::Video, Option<hwaccel::HwSession>)> {
+        let params = stream.parameters();
+        let id = params.id();
+        let mut ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
+        let session = match (mode, ffmpeg::decoder::find(id)) {
+            (HwMode::Off, _) | (_, None) => None,
+            // SAFETY: `ctx` is a valid, not yet opened codec context and `codec` a valid decoder.
+            (m, Some(codec)) => unsafe { hwaccel::attach(ctx.as_mut_ptr(), codec.as_ptr(), m)? },
+        };
+        ctx.set_threading(ffmpeg::threading::Config {
+            kind: ffmpeg::threading::Type::Frame,
+            // GPU decoders do their own parallelism; 0 = pick from CPU count.
+            count: if session.is_some() { 1 } else { 0 },
+        });
+        Ok((ctx.decoder().video()?, session))
+    };
+    match attempt(hw) {
+        Err(_) if *hw == HwMode::Auto => attempt(&HwMode::Off),
+        other => other,
+    }
+}
+
 impl VideoDecoder {
+    /// Which GPU backend is decoding (`cuda`, `vaapi`, ...), or `None` for software.
+    pub fn hw_backend(&self) -> Option<&str> {
+        self.hw.as_ref().map(|h| h.name.as_str())
+    }
+
+    /// If GPU decoding was tried and abandoned, why.
+    pub fn hw_fallback_reason(&self) -> Option<&str> {
+        self.hw_fallback.as_deref()
+    }
+
+    /// Give up on the GPU and continue in software from the last seek position.
+    fn switch_to_software(&mut self, reason: String) -> Result<()> {
+        let stream = self
+            .ictx
+            .stream(self.stream_index)
+            .ok_or(Error::NoStream("video"))?;
+        let (decoder, _) = build_decoder(&stream, &HwMode::Off)?;
+        self.decoder = decoder;
+        self.hw = None;
+        self.hw_fallback = Some(reason);
+        self.scaler = None;
+        let pos = self.seek_pos;
+        self.reseek(pos)
+    }
+
     /// Open the best video stream of `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_stream(path, None)
     }
 
+    /// Open the best video stream, optionally decoding on the GPU.
+    ///
+    /// With [`HwMode::Auto`] a GPU is used when one works for this codec and
+    /// software decoding is used otherwise; the result is identical either way
+    /// (up to tiny rounding differences). Check [`hw_backend`](Self::hw_backend)
+    /// to see which was used.
+    pub fn open_with(path: impl AsRef<Path>, hw: HwMode) -> Result<Self> {
+        Self::open_stream_with(path, None, hw)
+    }
+
     /// Open a specific video stream (`None` picks the best one).
     pub fn open_stream(path: impl AsRef<Path>, stream_index: Option<usize>) -> Result<Self> {
+        Self::open_stream_with(path, stream_index, HwMode::Off)
+    }
+
+    /// Open a specific video stream with a hardware mode.
+    pub fn open_stream_with(
+        path: impl AsRef<Path>,
+        stream_index: Option<usize>,
+        hw: HwMode,
+    ) -> Result<Self> {
         let path = path.as_ref();
         let ictx = open_input(path)?;
 
@@ -180,12 +260,9 @@ impl VideoDecoder {
         let time_base = stream.time_base();
         let origin_secs = start_offset_secs(&stream);
 
-        let mut ctx = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?;
-        ctx.set_threading(ffmpeg::threading::Config {
-            kind: ffmpeg::threading::Type::Frame,
-            count: 0, // 0 = pick automatically from CPU count
-        });
-        let decoder = ctx.decoder().video()?;
+        let (decoder, session) = build_decoder(&stream, &hw)?;
+        // Read before the first frame: with GPU decoding the format switches to a GPU one afterwards.
+        let coded_format = decoder.format();
 
         let avg = Rational::from(stream.avg_frame_rate());
         let info = VideoStreamInfo {
@@ -193,7 +270,7 @@ impl VideoDecoder {
             codec: stream.parameters().id().name().to_string(),
             width: decoder.width(),
             height: decoder.height(),
-            pixel_format: format!("{:?}", decoder.format()).to_lowercase(),
+            pixel_format: format!("{coded_format:?}").to_lowercase(),
             frame_rate: avg.is_valid().then_some(avg),
             time_base: Rational::from(time_base),
             frames: u64::try_from(stream.frames()).ok().filter(|&n| n > 0),
@@ -209,6 +286,9 @@ impl VideoDecoder {
             time_base,
             origin_secs,
             decoder,
+            hw: session,
+            hw_frames: 0,
+            hw_fallback: None,
             scaler: None,
             scaler_colour: None,
             info,
@@ -242,13 +322,31 @@ impl VideoDecoder {
 
     /// Next raw decoded frame in presentation order, `None` at end of stream.
     fn decode_raw(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
+        match self.decode_raw_inner() {
+            // The GPU failed before producing anything (unsupported profile, driver
+            // trouble): carry on in software instead of failing the whole clip.
+            Err(e) if self.hw.is_some() && self.hw_frames == 0 => {
+                self.switch_to_software(e.to_string())?;
+                self.decode_raw_inner()
+            }
+            other => other,
+        }
+    }
+
+    fn decode_raw_inner(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
         if let Some(f) = self.held.take() {
             return Ok(Some(f));
         }
         loop {
             let mut frame = ffmpeg::frame::Video::empty();
             match self.decoder.receive_frame(&mut frame) {
-                Ok(()) => return Ok(Some(frame)),
+                Ok(()) => {
+                    if hwaccel::is_hw_frame(&frame) {
+                        frame = hwaccel::download(&frame)?;
+                        self.hw_frames += 1;
+                    }
+                    return Ok(Some(frame));
+                }
                 Err(ffmpeg::Error::Eof) => return Ok(None),
                 Err(e) if is_again(&e) => {}
                 Err(e) => return Err(e.into()),

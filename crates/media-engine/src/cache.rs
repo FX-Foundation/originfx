@@ -7,6 +7,7 @@ use lru::LruCache;
 
 use crate::decode::VideoDecoder;
 use crate::error::{Error, Result};
+use crate::hwaccel::HwMode;
 use crate::index::FrameIndex;
 use crate::types::VideoFrame;
 
@@ -127,17 +128,22 @@ pub struct FrameReader {
 impl FrameReader {
     /// Open `path` with a cache of `cache_bytes`.
     pub fn open(path: impl AsRef<Path>, cache_bytes: usize) -> Result<Self> {
-        Self::open_inner(path.as_ref(), cache_bytes, false)
+        Self::open_inner(path.as_ref(), cache_bytes, false, HwMode::Off)
+    }
+
+    /// Like [`open`](Self::open), decoding on the GPU when `hw` allows it.
+    pub fn open_with(path: impl AsRef<Path>, cache_bytes: usize, hw: HwMode) -> Result<Self> {
+        Self::open_inner(path.as_ref(), cache_bytes, false, hw)
     }
 
     /// Like [`open`](Self::open) but always reads the exact frame times first.
     /// Costs one pass over the file; worth it when frame accuracy matters.
     pub fn open_exact(path: impl AsRef<Path>, cache_bytes: usize) -> Result<Self> {
-        Self::open_inner(path.as_ref(), cache_bytes, true)
+        Self::open_inner(path.as_ref(), cache_bytes, true, HwMode::Off)
     }
 
-    fn open_inner(path: &Path, cache_bytes: usize, force_index: bool) -> Result<Self> {
-        let decoder = VideoDecoder::open(path)?;
+    fn open_inner(path: &Path, cache_bytes: usize, force_index: bool, hw: HwMode) -> Result<Self> {
+        let decoder = VideoDecoder::open_with(path, hw)?;
         let fps = decoder.fps();
         let stream = decoder.info().index;
         let index = if force_index || FrameIndex::looks_variable(path, stream) {
