@@ -10,13 +10,17 @@
 pub mod cache;
 pub mod decode;
 pub mod error;
+pub mod preset;
 pub mod probe;
+pub mod transcode;
 pub mod types;
 
 pub use error::{Error, Result};
 pub use cache::{CacheStats, FrameCache, FrameReader};
 pub use decode::{AudioDecoder, AudioOptions, VideoDecoder};
+pub use preset::{ExportPreset, Quality};
 pub use probe::probe;
+pub use transcode::{export, export_with_progress, ExportReport, ExportSettings, Progress};
 pub use types::*;
 
 use std::sync::Once;
@@ -27,6 +31,14 @@ pub fn init() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         let _ = ffmpeg_next::init();
-        ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
+        // Quiet by default; set ORIGINFX_FFMPEG_LOG=debug|info|warning|error|quiet to see FFmpeg's own log.
+        let level = match std::env::var("ORIGINFX_FFMPEG_LOG").as_deref() {
+            Ok("quiet") => ffmpeg_next::log::Level::Quiet,
+            Ok("warning") => ffmpeg_next::log::Level::Warning,
+            Ok("info") => ffmpeg_next::log::Level::Info,
+            Ok("debug") => ffmpeg_next::log::Level::Debug,
+            _ => ffmpeg_next::log::Level::Error,
+        };
+        ffmpeg_next::log::set_level(level);
     });
 }

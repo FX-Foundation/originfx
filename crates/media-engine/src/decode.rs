@@ -26,7 +26,7 @@ fn open_input(path: &Path) -> Result<ffmpeg::format::context::Input> {
 }
 
 /// Stream start offset in seconds; many transport streams do not start at 0.
-fn start_offset_secs(stream: &ffmpeg::format::stream::Stream) -> f64 {
+pub(crate) fn start_offset_secs(stream: &ffmpeg::format::stream::Stream) -> f64 {
     let start = stream.start_time();
     let tb = stream.time_base();
     if start > 0 && tb.denominator() != 0 {
