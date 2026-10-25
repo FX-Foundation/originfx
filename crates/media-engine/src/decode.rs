@@ -515,7 +515,7 @@ impl AudioDecoder {
         let bytes = out.data(0);
         let samples: Vec<f32> = bytes[..wanted.min(bytes.len())]
             .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+            .map(|b| f32::from_ne_bytes(b.try_into().expect("chunk of 4 bytes")))
             .collect();
         self.queue.push_back(AudioBuffer {
             sample_rate: self.out_rate,
