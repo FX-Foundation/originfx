@@ -41,7 +41,7 @@ jobs:
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             # Surface the failure text as annotations so it is visible without the raw log.
-            tail -40 clippy.log \
+            grep -iE 'error|panick|failed|not found|cannot|unable|warning:' clippy.log | head -9 \
               | while IFS= read -r line; do echo "::error::${line}"; done
           fi
           exit "$status"
