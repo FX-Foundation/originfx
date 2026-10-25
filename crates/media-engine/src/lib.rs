@@ -10,14 +10,17 @@
 pub mod cache;
 pub mod decode;
 pub mod error;
+pub mod hwaccel;
 pub mod preset;
 pub mod probe;
+pub mod proxy;
 pub mod transcode;
 pub mod types;
 
 pub use error::{Error, Result};
 pub use cache::{CacheStats, FrameCache, FrameReader};
 pub use decode::{AudioDecoder, AudioOptions, VideoDecoder};
+pub use proxy::{ProxyManager, ProxySettings};
 pub use preset::{ExportPreset, Quality};
 pub use probe::probe;
 pub use transcode::{export, export_with_progress, ExportReport, ExportSettings, Progress};

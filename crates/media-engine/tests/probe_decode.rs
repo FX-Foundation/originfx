@@ -167,3 +167,44 @@ fn audio_seek_skips_ahead() {
     assert!((rest.pts_secs - 1.5).abs() < 0.05, "starts at {}", rest.pts_secs);
     assert!((rest.duration_secs() - 0.5).abs() < 0.15, "len {}", rest.duration_secs());
 }
+
+/// Phones film portrait video as landscape pixels plus a rotation flag.
+fn rotated_clip(dir: &std::path::Path, degrees: u32) -> std::path::PathBuf {
+    let src = pattern_clip(dir, "landscape.mp4", "320x180", 25, 2);
+    let out = dir.join(format!("rot{degrees}.mp4"));
+    if !out.exists() {
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-display_rotation", &degrees.to_string(),
+                   "-i", src.to_str().unwrap(), "-c", "copy", out.to_str().unwrap()])
+            .status().unwrap().success();
+        assert!(ok);
+    }
+    out
+}
+
+#[test]
+fn rotation_flag_is_probed_decoded_and_exported() {
+    require_ffmpeg!();
+    let dir = scratch("rotation");
+    // ffmpeg's -display_rotation is counter-clockwise; 90 ccw == 270 cw.
+    let clip = rotated_clip(&dir, 90);
+    let info = probe(&clip).unwrap();
+    let v = info.primary_video().unwrap();
+    assert_eq!((v.width, v.height), (320, 180), "coded size is unchanged");
+    assert_eq!(v.rotation, 270);
+    assert_eq!((v.display_width(), v.display_height()), (180, 320));
+
+    let f = VideoDecoder::open(&clip).unwrap().next_frame().unwrap().unwrap();
+    assert_eq!((f.width, f.height), (180, 320), "decoder returns upright frames");
+
+    // Export bakes the rotation in and leaves no rotation flag behind.
+    let out = dir.join("upright.mp4");
+    media_engine::export(&clip, &out, &media_engine::ExportSettings::new(media_engine::ExportPreset::Mp4H264).quality(media_engine::Quality::Draft)).unwrap();
+    let o = probe(&out).unwrap();
+    let ov = o.primary_video().unwrap();
+    assert_eq!((ov.width, ov.height, ov.rotation), (180, 320, 0));
+
+    // And an unrotated clip is untouched.
+    let plain = probe(&pattern_clip(&dir, "landscape.mp4", "320x180", 25, 2)).unwrap();
+    assert_eq!(plain.primary_video().unwrap().rotation, 0);
+}

@@ -9,7 +9,7 @@ use ffmpeg::media::Type;
 use ffmpeg_next as ffmpeg;
 
 use crate::error::{Error, Result};
-use crate::probe::stream_duration_secs;
+use crate::probe::{stream_duration_secs, stream_rotation};
 use crate::types::{AudioBuffer, Rational, VideoFrame, VideoStreamInfo};
 
 /// `AVERROR(EAGAIN)`: "feed me more input" from `receive_frame`.
@@ -36,13 +36,79 @@ pub(crate) fn start_offset_secs(stream: &ffmpeg::format::stream::Stream) -> f64 
     }
 }
 
-fn to_av_time_base(secs: f64) -> i64 {
-    (secs.max(0.0) * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64
+/// Seek `ictx` to just before `abs_secs` (absolute container time) using the
+/// given stream's own timeline.
+///
+/// `Input::seek` always seeks on FFmpeg's "default stream", which may be the
+/// audio stream; landing on an audio packet drops us in the middle of a video
+/// GOP and the next decodable video frame is a whole keyframe interval late.
+fn seek_on_stream(
+    ictx: &mut ffmpeg::format::context::Input,
+    stream_index: usize,
+    time_base: ffmpeg::Rational,
+    abs_secs: f64,
+) -> Result<()> {
+    let tb = f64::from(time_base.numerator()) / f64::from(time_base.denominator().max(1));
+    let ts = (abs_secs.max(0.0) / tb.max(1e-12)).round() as i64;
+    // SAFETY: `ictx` is a valid, open input context for the whole call, and
+    // `stream_index` came from one of its streams. Passing `i64::MIN` as the
+    // lower bound and `ts` as both target and upper bound requests the nearest
+    // seek point at or before `ts`.
+    let ret = unsafe {
+        ffmpeg::ffi::avformat_seek_file(ictx.as_mut_ptr(), stream_index as i32, i64::MIN, ts, ts, 0)
+    };
+    if ret < 0 {
+        return Err(ffmpeg::Error::from(ret).into());
+    }
+    Ok(())
 }
+
 
 // ---------------------------------------------------------------------------
 // Video
 // ---------------------------------------------------------------------------
+
+/// Rotate tightly packed RGBA clockwise by `degrees` (0, 90, 180 or 270).
+/// Returns the new buffer and its width and height.
+pub(crate) fn rotate_rgba(data: Vec<u8>, w: u32, h: u32, degrees: u32) -> (Vec<u8>, u32, u32) {
+    let (wu, hu) = (w as usize, h as usize);
+    match degrees % 360 {
+        90 => {
+            let mut out = vec![0u8; data.len()];
+            // (x, y) -> (h - 1 - y, x); the new image is h wide and w tall.
+            for y in 0..hu {
+                for x in 0..wu {
+                    let src = (y * wu + x) * 4;
+                    let dst = (x * hu + (hu - 1 - y)) * 4;
+                    out[dst..dst + 4].copy_from_slice(&data[src..src + 4]);
+                }
+            }
+            (out, h, w)
+        }
+        180 => {
+            let mut out = vec![0u8; data.len()];
+            let total = wu * hu;
+            for i in 0..total {
+                let dst = (total - 1 - i) * 4;
+                out[dst..dst + 4].copy_from_slice(&data[i * 4..i * 4 + 4]);
+            }
+            (out, w, h)
+        }
+        270 => {
+            let mut out = vec![0u8; data.len()];
+            // (x, y) -> (y, w - 1 - x); the new image is h wide and w tall.
+            for y in 0..hu {
+                for x in 0..wu {
+                    let src = (y * wu + x) * 4;
+                    let dst = ((wu - 1 - x) * hu + y) * 4;
+                    out[dst..dst + 4].copy_from_slice(&data[src..src + 4]);
+                }
+            }
+            (out, h, w)
+        }
+        _ => (data, w, h),
+    }
+}
 
 /// Sequential video decoder that yields RGBA frames and can seek.
 ///
@@ -62,6 +128,10 @@ pub struct VideoDecoder {
     held: Option<ffmpeg::frame::Video>,
     /// After a seek: the time whose frame we are looking for.
     target: Option<f64>,
+    /// Where the last seek actually pointed (seconds from stream start).
+    seek_pos: f64,
+    /// How far to step back if a seek lands after its target.
+    retry_step: f64,
 }
 
 impl VideoDecoder {
@@ -105,6 +175,7 @@ impl VideoDecoder {
             frames: u64::try_from(stream.frames()).ok().filter(|&n| n > 0),
             duration_secs: stream_duration_secs(stream.duration(), time_base),
             bit_rate: Some(decoder.bit_rate() as u64).filter(|&b| b > 0),
+            rotation: stream_rotation(&stream),
         };
         drop(stream);
 
@@ -119,6 +190,8 @@ impl VideoDecoder {
             eof_sent: false,
             held: None,
             target: None,
+            seek_pos: 0.0,
+            retry_step: 1.0,
         })
     }
 
@@ -204,12 +277,9 @@ impl VideoDecoder {
         for y in 0..h as usize {
             data.extend_from_slice(&src[y * stride..y * stride + row]);
         }
-        Ok(VideoFrame {
-            width: w,
-            height: h,
-            pts_secs: self.pts_secs(raw),
-            data,
-        })
+        let pts_secs = self.pts_secs(raw);
+        let (data, w, h) = rotate_rgba(data, w, h, self.info.rotation);
+        Ok(VideoFrame { width: w, height: h, pts_secs, data })
     }
 
     /// Decode the next frame, or `None` at the end of the stream.
@@ -221,19 +291,37 @@ impl VideoDecoder {
             };
         };
 
-        // Just after a seek: we landed on a keyframe at or before `target`.
-        // Decode forward and return the last frame whose start time is <= target.
+        // Just after a seek: decode forward and return the last frame whose
+        // start time is <= target. Some demuxers (MPEG-TS, raw streams) land
+        // between keyframes; the decoder then only produces frames from the
+        // *next* keyframe, i.e. after the target. When that happens we seek
+        // further back, doubling the step, until we start at or before it.
         let mut previous: Option<ffmpeg::frame::Video> = None;
         loop {
             match self.decode_raw()? {
                 None => {
+                    if previous.is_none() && self.seek_pos > 0.0 {
+                        // Landed so late that nothing decodable was left (e.g. past the
+                        // last keyframe of a stream without a seek index): go back.
+                        let back_to = (self.seek_pos - self.retry_step).max(0.0);
+                        self.retry_step *= 2.0;
+                        self.reseek(back_to)?;
+                        continue;
+                    }
                     return match previous {
                         Some(raw) => Ok(Some(self.convert(&raw)?)),
                         None => Ok(None),
-                    }
+                    };
                 }
                 Some(raw) => {
-                    if self.pts_secs(&raw) > target + 1e-6 {
+                    let pts = self.pts_secs(&raw);
+                    if previous.is_none() && pts > target + 1e-6 && self.seek_pos > 0.0 {
+                        let back_to = (self.seek_pos - self.retry_step).max(0.0);
+                        self.retry_step *= 2.0;
+                        self.reseek(back_to)?;
+                        continue;
+                    }
+                    if pts > target + 1e-6 {
                         // `raw` is already after the target; `previous` is on screen.
                         let chosen = match previous {
                             Some(prev) => {
@@ -250,15 +338,22 @@ impl VideoDecoder {
         }
     }
 
+    /// Low-level seek used by [`seek`](Self::seek) and its retry logic.
+    fn reseek(&mut self, secs: f64) -> Result<()> {
+        seek_on_stream(&mut self.ictx, self.stream_index, self.time_base, secs + self.origin_secs)?;
+        self.decoder.flush();
+        self.eof_sent = false;
+        self.held = None;
+        self.seek_pos = secs;
+        Ok(())
+    }
+
     /// Seek so that the next [`next_frame`](Self::next_frame) returns the
     /// frame displayed at `secs`.
     pub fn seek(&mut self, secs: f64) -> Result<()> {
         let secs = secs.max(0.0);
-        let ts = to_av_time_base(secs + self.origin_secs);
-        self.ictx.seek(ts, ..ts)?;
-        self.decoder.flush();
-        self.eof_sent = false;
-        self.held = None;
+        self.reseek(secs)?;
+        self.retry_step = 1.0;
         self.target = Some(secs);
         Ok(())
     }
@@ -299,6 +394,8 @@ pub struct AudioDecoder {
     origin_secs: f64,
     decoder: ffmpeg::decoder::Audio,
     resampler: ffmpeg::software::resampling::Context,
+    in_rate: u32,
+    out_layout: ffmpeg::ChannelLayout,
     out_rate: u32,
     out_channels: u16,
     eof_sent: bool,
@@ -344,8 +441,10 @@ impl AudioDecoder {
             stream_index: index,
             time_base,
             origin_secs,
+            in_rate: decoder.rate(),
             decoder,
             resampler,
+            out_layout,
             out_rate,
             out_channels,
             eof_sent: false,
@@ -369,6 +468,24 @@ impl AudioDecoder {
         let pts = frame.pts().or_else(|| frame.timestamp()).unwrap_or(0);
         pts as f64 * f64::from(self.time_base.numerator()) / f64::from(self.time_base.denominator())
             - self.origin_secs
+    }
+
+    /// An output frame big enough for everything the resampler can produce now.
+    ///
+    /// `swr_convert_frame` writes at most `nb_samples` of an *allocated* output
+    /// frame, and an empty frame defaults to the input's sample count. When the
+    /// rate goes up, that silently leaves samples stuck inside the resampler.
+    fn alloc_out(&self, in_samples: usize) -> ffmpeg::frame::Audio {
+        let delay = self.resampler.delay().map_or(0, |d| d.output.max(0) as usize);
+        let scaled = in_samples as u64 * u64::from(self.out_rate) / u64::from(self.in_rate.max(1));
+        let wanted = delay + scaled as usize + 64;
+        let mut out = ffmpeg::frame::Audio::new(
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            wanted,
+            self.out_layout,
+        );
+        out.set_rate(self.out_rate);
+        out
     }
 
     fn push_resampled(&mut self, pts: f64, out: &ffmpeg::frame::Audio) {
@@ -428,13 +545,13 @@ impl AudioDecoder {
                             frame.channels(),
                         )));
                     }
-                    let mut out = ffmpeg::frame::Audio::empty();
+                    let mut out = self.alloc_out(frame.samples());
                     self.resampler.run(&frame, &mut out)?;
                     self.push_resampled(pts, &out);
                     continue;
                 }
                 Err(ffmpeg::Error::Eof) => {
-                    let mut out = ffmpeg::frame::Audio::empty();
+                    let mut out = self.alloc_out(0);
                     if self.resampler.flush(&mut out).is_ok() {
                         let pts = self.queue.back().map_or(0.0, |b| b.pts_secs + b.duration_secs());
                         self.push_resampled(pts, &out);
@@ -474,8 +591,7 @@ impl AudioDecoder {
     /// Seek so the next buffer starts at (or just after) `secs`.
     pub fn seek(&mut self, secs: f64) -> Result<()> {
         let secs = secs.max(0.0);
-        let ts = to_av_time_base(secs + self.origin_secs);
-        self.ictx.seek(ts, ..ts)?;
+        seek_on_stream(&mut self.ictx, self.stream_index, self.time_base, secs + self.origin_secs)?;
         self.decoder.flush();
         self.queue.clear();
         self.eof_sent = false;
@@ -498,5 +614,53 @@ impl AudioDecoder {
             pts_secs: first.unwrap_or(0.0),
             samples,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rotate_rgba;
+
+    /// 3x2 image, each pixel's first byte is its index:
+    ///   0 1 2
+    ///   3 4 5
+    fn sample() -> Vec<u8> {
+        (0..6u8).flat_map(|i| [i, 0, 0, 255]).collect()
+    }
+
+    fn ids(data: &[u8]) -> Vec<u8> {
+        data.chunks(4).map(|p| p[0]).collect()
+    }
+
+    #[test]
+    fn rotates_clockwise() {
+        let (d, w, h) = rotate_rgba(sample(), 3, 2, 90);
+        assert_eq!((w, h), (2, 3));
+        assert_eq!(ids(&d), vec![3, 0, 4, 1, 5, 2]);
+    }
+
+    #[test]
+    fn rotates_half_turn() {
+        let (d, w, h) = rotate_rgba(sample(), 3, 2, 180);
+        assert_eq!((w, h), (3, 2));
+        assert_eq!(ids(&d), vec![5, 4, 3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn rotates_counter_clockwise() {
+        let (d, w, h) = rotate_rgba(sample(), 3, 2, 270);
+        assert_eq!((w, h), (2, 3));
+        assert_eq!(ids(&d), vec![2, 5, 1, 4, 0, 3]);
+    }
+
+    #[test]
+    fn zero_is_untouched_and_four_quarter_turns_restore() {
+        let (d, w, h) = rotate_rgba(sample(), 3, 2, 0);
+        assert_eq!((w, h, ids(&d)), (3, 2, vec![0, 1, 2, 3, 4, 5]));
+        let (mut d, mut w, mut h) = (sample(), 3, 2);
+        for _ in 0..4 {
+            (d, w, h) = rotate_rgba(d, w, h, 90);
+        }
+        assert_eq!((w, h, ids(&d)), (3, 2, vec![0, 1, 2, 3, 4, 5]));
     }
 }

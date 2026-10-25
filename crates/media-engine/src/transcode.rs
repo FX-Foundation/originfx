@@ -14,6 +14,7 @@ use ffmpeg::{codec, filter, format, frame, picture, Dictionary, Packet, Rational
 use ffmpeg_next as ffmpeg;
 
 use crate::decode::start_offset_secs;
+use crate::probe::stream_rotation;
 use crate::error::{Error, Result};
 use crate::preset::{find_encoder, AudioSpec, ExportPreset, Quality, VideoSpec};
 
@@ -325,7 +326,10 @@ impl VideoPipe {
         if iw == 0 || ih == 0 {
             return Err(Error::InvalidArgument("video stream has no dimensions".into()));
         }
-        let (ow, oh) = target_dims(iw, ih, settings);
+        let rotation = stream_rotation(&ist);
+        // Dimensions as the viewer sees them, after rotation.
+        let (vw, vh) = if rotation % 180 == 90 { (ih, iw) } else { (iw, ih) };
+        let (ow, oh) = target_dims(vw, vh, settings);
 
         let avg = ist.avg_frame_rate();
         let src_fps = if avg.numerator() > 0 && avg.denominator() > 0 {
@@ -375,8 +379,14 @@ impl VideoPipe {
 
         // Filter graph: rebase timestamps, conform to constant fps, scale, convert pixel format.
         let ticks = (origin_secs * f64::from(in_tb.denominator()) / f64::from(in_tb.numerator().max(1))).round() as i64;
+        let rotate = match rotation {
+            90 => ",transpose=clock",
+            180 => ",hflip,vflip",
+            270 => ",transpose=cclock",
+            _ => "",
+        };
         let mut spec_str = format!(
-            "setpts=PTS-{ticks},fps={}/{},scale={ow}:{oh}",
+            "setpts=PTS-{ticks},fps={}/{}{rotate},scale={ow}:{oh}",
             fps.numerator(),
             fps.denominator()
         );

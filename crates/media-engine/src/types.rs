@@ -61,6 +61,22 @@ pub struct VideoStreamInfo {
     pub frames: Option<u64>,
     pub duration_secs: Option<f64>,
     pub bit_rate: Option<u64>,
+    /// Clockwise rotation in degrees (0, 90, 180 or 270) the file asks players
+    /// to apply, typically set by phones filmed in portrait. The decoder and
+    /// exporter apply it automatically; `width`/`height` are the *coded* size.
+    pub rotation: u32,
+}
+
+impl VideoStreamInfo {
+    /// Width after rotation is applied, i.e. what the viewer sees.
+    pub fn display_width(&self) -> u32 {
+        if self.rotation % 180 == 90 { self.height } else { self.width }
+    }
+
+    /// Height after rotation is applied.
+    pub fn display_height(&self) -> u32 {
+        if self.rotation % 180 == 90 { self.width } else { self.height }
+    }
 }
 
 /// Description of one audio stream.

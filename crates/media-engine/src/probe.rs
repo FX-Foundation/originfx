@@ -48,6 +48,7 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo> {
                     .decoder()
                     .video()?;
                 let avg = Rational::from(stream.avg_frame_rate());
+                let rotation = stream_rotation(&stream);
                 video.push(VideoStreamInfo {
                     index: stream.index(),
                     codec,
@@ -59,6 +60,7 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo> {
                     frames: u64::try_from(stream.frames()).ok().filter(|&n| n > 0),
                     duration_secs,
                     bit_rate: Some(dec.bit_rate() as u64).filter(|&b| b > 0),
+                    rotation,
                 });
             }
             Type::Audio => {
@@ -107,6 +109,40 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo> {
         subtitles,
         metadata,
     })
+}
+
+/// Clockwise rotation (0, 90, 180, 270) a stream's display matrix asks for.
+pub(crate) fn stream_rotation(stream: &ffmpeg::format::stream::Stream) -> u32 {
+    let params = stream.parameters();
+    // SAFETY: `params` owns a valid AVCodecParameters for the duration of this
+    // call. `coded_side_data` is an array of `nb_coded_side_data` entries owned
+    // by it, and we only read entries inside that range. A display matrix is 9
+    // i32 values (36 bytes), which we check before handing the pointer to
+    // `av_display_rotation_get`.
+    unsafe {
+        let p = params.as_ptr();
+        let n = usize::try_from((*p).nb_coded_side_data).unwrap_or(0);
+        let data = (*p).coded_side_data;
+        if data.is_null() {
+            return 0;
+        }
+        for i in 0..n {
+            let sd = &*data.add(i);
+            if sd.type_ == ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX
+                && sd.size >= 36
+                && !sd.data.is_null()
+            {
+                let angle = ffmpeg::ffi::av_display_rotation_get(sd.data as *const i32);
+                if angle.is_nan() {
+                    return 0;
+                }
+                // FFmpeg reports counter-clockwise degrees; flip to clockwise and snap to 90s.
+                let cw = (-angle).rem_euclid(360.0);
+                return (((cw / 90.0).round() as u32) % 4) * 90;
+            }
+        }
+    }
+    0
 }
 
 /// Convert a stream duration (in `time_base` units) to seconds.

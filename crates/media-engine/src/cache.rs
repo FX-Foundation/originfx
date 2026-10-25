@@ -178,14 +178,16 @@ impl FrameReader {
         let mut last_seen: Option<Arc<VideoFrame>> = None;
         loop {
             let Some(frame) = self.decoder.next_frame()? else {
-                // End of stream: whatever we saw last is the final frame.
+                // End of stream: the last frame we produced is the final frame.
+                let Some(next) = self.next_index.filter(|&n| n > 0) else {
+                    return Err(Error::InvalidArgument(format!("frame {index} is past the end of the stream")));
+                };
+                let last = next - 1;
+                self.last_index = Some(last);
                 return match last_seen {
-                    Some(f) => {
-                        let last = self.next_index.map_or(index, |n| n.saturating_sub(1));
-                        self.last_index = Some(last);
-                        Ok(f)
-                    }
-                    None => Err(Error::InvalidArgument(format!("frame {index} is past the end of the stream"))),
+                    Some(f) => Ok(f),
+                    // We were already sitting at the end; fetch the final frame (from cache or by seeking).
+                    None => self.frame(last),
                 };
             };
             let idx = match self.next_index {
