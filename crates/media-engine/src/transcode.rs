@@ -39,6 +39,14 @@ pub struct ExportSettings {
     pub start_secs: Option<f64>,
     /// Keep only the part of the clip up to this time (seconds from the start).
     pub end_secs: Option<f64>,
+    /// Bits per colour channel: 8 or 10. `None` keeps 10-bit sources at 10-bit for
+    /// H.265, VP9 and AV1 and writes 8-bit otherwise. Asking for 10 explicitly also
+    /// works for H.264 (High 10 profile, which many devices cannot play).
+    pub bit_depth: Option<u8>,
+    /// Container stream index of the video stream to use (see `probe`); `None` picks the best one.
+    pub video_stream: Option<usize>,
+    /// Container stream index of the audio track to use; `None` picks the default track.
+    pub audio_stream: Option<usize>,
 }
 
 impl ExportSettings {
@@ -54,6 +62,9 @@ impl ExportSettings {
             fast_start: true,
             start_secs: None,
             end_secs: None,
+            bit_depth: None,
+            video_stream: None,
+            audio_stream: None,
         }
     }
 
@@ -92,6 +103,24 @@ impl ExportSettings {
     pub fn trim(mut self, start_secs: Option<f64>, end_secs: Option<f64>) -> Self {
         self.start_secs = start_secs;
         self.end_secs = end_secs;
+        self
+    }
+
+    /// Force 8-bit or 10-bit video output (see [`ExportSettings::bit_depth`]).
+    pub fn bit_depth(mut self, bits: u8) -> Self {
+        self.bit_depth = Some(bits);
+        self
+    }
+
+    /// Use a specific video stream (container index, as listed by `probe`).
+    pub fn video_stream(mut self, index: usize) -> Self {
+        self.video_stream = Some(index);
+        self
+    }
+
+    /// Use a specific audio track (container index, as listed by `probe`).
+    pub fn audio_stream(mut self, index: usize) -> Self {
+        self.audio_stream = Some(index);
         self
     }
 
@@ -230,9 +259,114 @@ fn target_dims(iw: u32, ih: u32, settings: &ExportSettings) -> (u32, u32) {
     (w, h)
 }
 
+/// Channel layouts to try for the output, best first. We keep the source's
+/// channels (up to what the format carries) and fall back to a stereo mix.
+/// Several layouts with the same channel count are offered because encoders
+/// differ on which one they accept (Opus wants 5.1 "back", AAC takes either).
+fn layout_candidates(
+    codec: &ffmpeg::codec::Audio,
+    source: ffmpeg::ChannelLayout,
+    source_channels: u16,
+    max_channels: u16,
+    prefer_back: bool,
+) -> Vec<ffmpeg::ChannelLayout> {
+    use ffmpeg::ChannelLayout as L;
+    if source_channels <= 1 {
+        return vec![L::MONO];
+    }
+    let mut out: Vec<L> = Vec::new();
+    if source_channels > 2 && max_channels > 2 {
+        let supported: Option<Vec<L>> = codec.channel_layouts().map(|l| l.collect());
+        let accepts = |l: &L| supported.as_ref().is_none_or(|s| s.contains(l));
+        let n = source_channels.min(max_channels);
+        let mut all = Vec::new();
+        if source_channels <= max_channels && !source.is_empty() {
+            all.push(source);
+        }
+        all.push(L::default(i32::from(n)));
+        all.extend(match n {
+            3 => vec![L::SURROUND],
+            4 => vec![L::QUAD, L::_4POINT0],
+            5 => vec![L::_5POINT0_BACK, L::_5POINT0],
+            6 => vec![L::_5POINT1_BACK, L::_5POINT1],
+            8 => vec![L::_7POINT1, L::_7POINT1_WIDE_BACK],
+            _ => vec![],
+        });
+        if prefer_back {
+            // Encoders such as Opus only take the "back" variants; try those first
+            // so a rejected attempt does not log noise.
+            let back = [L::_5POINT1_BACK, L::_5POINT0_BACK, L::_7POINT1, L::QUAD];
+            all.sort_by_key(|l| !back.contains(l)); // stable: back variants first
+        }
+        for l in all {
+            if i32::from(n) == l.channels() && accepts(&l) && !out.contains(&l) {
+                out.push(l);
+            }
+        }
+    }
+    out.push(L::STEREO);
+    out
+}
+
+/// Bits per channel of a pixel format, judged from its name (`yuv420p10le` is 10).
+fn source_bit_depth(fmt: Pixel) -> u8 {
+    let name = format!("{fmt:?}").to_lowercase();
+    if name.starts_with("p010") {
+        return 10;
+    }
+    let name = name
+        .trim_end_matches("le")
+        .trim_end_matches("be")
+        .to_string();
+    for (suffix, bits) in [("16", 16), ("14", 14), ("12", 12), ("10", 10)] {
+        if name.ends_with(suffix) && name.starts_with(['y', 'g', 'n']) {
+            return bits;
+        }
+    }
+    8
+}
+
+/// Output pixel format for this export, honouring the requested bit depth.
+fn output_pix_fmt(settings: &ExportSettings, spec: &VideoSpec, src: Pixel) -> Result<&'static str> {
+    use ExportPreset::*;
+    let ten_bit_capable = matches!(
+        settings.preset,
+        Mp4H265 | MkvH265 | WebmVp9 | WebmAv1 | Mp4H264 | MovH264 | MkvH264
+    );
+    let wants_ten = match settings.bit_depth {
+        Some(8) => false,
+        Some(10) => true,
+        Some(other) => {
+            return Err(Error::InvalidArgument(format!(
+                "bit depth must be 8 or 10, not {other}"
+            )))
+        }
+        None => {
+            // Automatic: only where 10-bit is widely playable.
+            source_bit_depth(src) > 8
+                && matches!(settings.preset, Mp4H265 | MkvH265 | WebmVp9 | WebmAv1)
+        }
+    };
+    if !wants_ten {
+        return Ok(spec.pix_fmt);
+    }
+    if settings.bit_depth == Some(10) && !ten_bit_capable && !spec.pix_fmt.contains("10") {
+        return Err(Error::Unsupported(format!(
+            "{} cannot be written in 10-bit",
+            settings.preset.label()
+        )));
+    }
+    Ok(if ten_bit_capable {
+        "yuv420p10le"
+    } else {
+        spec.pix_fmt
+    })
+}
+
 fn pixel_from_name(name: &str) -> Result<Pixel> {
     Ok(match name {
         "yuv420p" => Pixel::YUV420P,
+        "yuv420p10le" => Pixel::YUV420P10LE,
         "yuvj420p" => Pixel::YUVJ420P,
         "yuv422p" => Pixel::YUV422P,
         "yuv422p10le" => Pixel::YUV422P10LE,
@@ -415,7 +549,8 @@ impl VideoPipe {
         };
 
         let (codec_found, name) = find_encoder(spec.encoders)?;
-        let pix = pixel_from_name(spec.pix_fmt)?;
+        let pix_name = output_pix_fmt(settings, &spec, decoder.format())?;
+        let pix = pixel_from_name(pix_name)?;
 
         let mut ost = octx.add_stream(codec_found)?;
         let out_index = ost.index();
@@ -445,7 +580,7 @@ impl VideoPipe {
             ih,
             crate::colour::is_full_range_format(src_fmt),
         );
-        let out_full = spec.pix_fmt.starts_with("yuvj");
+        let out_full = pix_name.starts_with("yuvj");
         let tag_colour = settings.preset != ExportPreset::Gif;
         if tag_colour {
             enc.set_colorspace(colour.space);
@@ -511,11 +646,20 @@ impl VideoPipe {
             fps.denominator()
         );
         if settings.preset == ExportPreset::Gif {
-            spec_str.push_str(
-                ",split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5",
-            );
+            // One shared palette looks best but needs the whole clip in memory.
+            // For longer clips use a palette per frame, which streams.
+            let long_clip = ictx.duration() > 20 * i64::from(ffmpeg::ffi::AV_TIME_BASE);
+            if long_clip {
+                spec_str.push_str(
+                    ",split[s0][s1];[s0]palettegen=stats_mode=single[p];[s1][p]paletteuse=new=1:dither=bayer:bayer_scale=5",
+                );
+            } else {
+                spec_str.push_str(
+                    ",split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5",
+                );
+            }
         } else {
-            spec_str.push_str(&format!(",format={}", spec.pix_fmt));
+            spec_str.push_str(&format!(",format={pix_name}"));
         }
 
         let sar_args = if sar.numerator() > 0 && sar.denominator() > 0 {
@@ -628,6 +772,8 @@ struct AudioPipe {
     enc_tb: Rational,
     out_tb: Rational,
     last_pts_secs: f64,
+    /// Samples (per channel) handed to the encoder so far.
+    samples_sent: u64,
     encoder_name: &'static str,
 }
 
@@ -651,14 +797,16 @@ impl AudioPipe {
         } else {
             decoder.channel_layout()
         };
-        let out_layout = if decoder.channels() == 1 {
-            ffmpeg::ChannelLayout::MONO
-        } else {
-            ffmpeg::ChannelLayout::STEREO
-        };
 
         let (codec_found, name) = find_encoder(spec.encoders)?;
         let audio_codec = codec_found.audio()?;
+        let candidates = layout_candidates(
+            &audio_codec,
+            in_layout,
+            decoder.channels(),
+            spec.max_channels,
+            name == "libopus",
+        );
         let rate = spec.fixed_rate.unwrap_or_else(|| {
             let wanted = decoder.rate();
             match audio_codec.rates() {
@@ -680,27 +828,48 @@ impl AudioPipe {
             .and_then(|mut f| f.next())
             .ok_or_else(|| Error::Unsupported(format!("{name}: unknown sample formats")))?;
 
+        // Try each candidate layout until the encoder accepts one.
+        let mut found = None;
+        let mut last_err = None;
+        for layout in candidates {
+            let mut enc = new_encoder_context(&codec_found)?.encoder().audio()?;
+            if global_header {
+                enc.set_flags(codec::Flags::GLOBAL_HEADER);
+            }
+            enc.set_rate(rate as i32);
+            enc.set_channel_layout(layout);
+            enc.set_channels(layout.channels());
+            enc.set_format(sample_fmt);
+            if spec.lossy {
+                let default = match layout.channels() {
+                    1 => 128_000,
+                    2 => 192_000,
+                    n => 64_000 * u64::from(n.unsigned_abs()),
+                };
+                enc.set_bit_rate(settings.audio_bitrate.unwrap_or(default) as usize);
+            }
+            enc.set_time_base((1, rate as i32));
+            // Opus needs an explicit channel mapping for anything beyond stereo.
+            let mut audio_opts: Vec<(&str, String)> = Vec::new();
+            if name == "libopus" && layout.channels() > 2 {
+                audio_opts.push(("mapping_family", "1".into()));
+            }
+            match enc.open_as_with(codec_found, dictionary(&audio_opts)) {
+                Ok(opened) => {
+                    found = Some(opened);
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        let Some(opened) = found else {
+            return Err(last_err.map(Error::from).unwrap_or_else(|| {
+                Error::Unsupported(format!("{name}: no usable channel layout"))
+            }));
+        };
         let mut ost = octx.add_stream(codec_found)?;
         let out_index = ost.index();
-        let mut enc = new_encoder_context(&codec_found)?.encoder().audio()?;
-        if global_header {
-            enc.set_flags(codec::Flags::GLOBAL_HEADER);
-        }
-        enc.set_rate(rate as i32);
-        enc.set_channel_layout(out_layout);
-        enc.set_channels(out_layout.channels());
-        enc.set_format(sample_fmt);
-        if spec.lossy {
-            let default = if out_layout.channels() == 1 {
-                128_000
-            } else {
-                192_000
-            };
-            enc.set_bit_rate(settings.audio_bitrate.unwrap_or(default) as usize);
-        }
-        enc.set_time_base((1, rate as i32));
         ost.set_time_base((1, rate as i32));
-        let opened = enc.open_as(codec_found)?;
         ost.set_parameters(&opened);
 
         let ticks = (origin_secs * f64::from(in_tb.denominator())
@@ -762,6 +931,7 @@ impl AudioPipe {
             enc_tb: Rational::new(1, rate as i32),
             out_tb: Rational::new(1, rate as i32),
             last_pts_secs: 0.0,
+            samples_sent: 0,
             encoder_name: name,
         })
     }
@@ -769,9 +939,9 @@ impl AudioPipe {
     fn encode_drain(&mut self, octx: &mut format::context::Output) -> Result<()> {
         let mut pkt = Packet::empty();
         while self.encoder.receive_packet(&mut pkt).is_ok() {
-            // FLAC emits a trailing zero-length packet that only carries updated
-            // header metadata; the muxer rejects it when fed through this API,
-            // so skip it. The audio data itself is complete.
+            // FLAC emits a trailing zero-length packet that only carries the final
+            // header (total sample count). The muxer rejects it through this API,
+            // so skip it; `patch_flac_length` writes the count into the file afterwards.
             if pkt.size() == 0 {
                 continue;
             }
@@ -792,6 +962,7 @@ impl AudioPipe {
             .frame(&mut out)
             .is_ok()
         {
+            self.samples_sent += out.samples() as u64;
             self.encoder.send_frame(&out)?;
             self.encode_drain(octx)?;
         }
@@ -824,6 +995,43 @@ impl AudioPipe {
     }
 }
 
+/// Write the total sample count into a finished FLAC file's STREAMINFO block.
+///
+/// FFmpeg's FLAC muxer normally does this from a final zero-length packet that
+/// the API we use will not accept. Without it, players cannot show the length.
+/// Does nothing if the file is not plain FLAC or already has a count.
+fn patch_flac_length(path: &Path, total_samples: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    if total_samples == 0 || total_samples >= (1 << 36) {
+        return Ok(());
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    // "fLaC", then block header (type 0 = STREAMINFO, length 34), then 34 bytes.
+    let mut head = [0_u8; 4 + 4 + 34];
+    if f.read_exact(&mut head).is_err() || &head[..4] != b"fLaC" || head[4] & 0x7F != 0 {
+        return Ok(());
+    }
+    let info = &mut head[8..];
+    let existing = u64::from(info[13] & 0x0F) << 32
+        | u64::from(info[14]) << 24
+        | u64::from(info[15]) << 16
+        | u64::from(info[16]) << 8
+        | u64::from(info[17]);
+    if existing != 0 {
+        return Ok(());
+    }
+    info[13] = (info[13] & 0xF0) | ((total_samples >> 32) & 0x0F) as u8;
+    info[14] = (total_samples >> 24) as u8;
+    info[15] = (total_samples >> 16) as u8;
+    info[16] = (total_samples >> 8) as u8;
+    info[17] = total_samples as u8;
+    f.seek(SeekFrom::Start(0))?;
+    f.write_all(&head)
+}
+
 // --- driver -----------------------------------------------------------------
 
 fn run_export(
@@ -837,17 +1045,31 @@ fn run_export(
     let trim = settings.trim_range()?;
     let mut ictx = format::input(&input)?;
 
+    let pick = |ictx: &format::context::Input,
+                wanted: Option<usize>,
+                kind: Type,
+                label: &'static str|
+     -> Result<Option<usize>> {
+        match wanted {
+            Some(i) => match ictx.stream(i) {
+                Some(s) if s.parameters().medium() == kind => Ok(Some(i)),
+                Some(_) => Err(Error::InvalidArgument(format!(
+                    "stream {i} is not a {label} stream"
+                ))),
+                None => Err(Error::InvalidArgument(format!("no stream with index {i}"))),
+            },
+            None => Ok(ictx.streams().best(kind).map(|s| s.index())),
+        }
+    };
     let video_in = match preset.video() {
         Some(_) => Some(
-            ictx.streams()
-                .best(Type::Video)
-                .ok_or(Error::NoStream("video"))?
-                .index(),
+            pick(&ictx, settings.video_stream, Type::Video, "video")?
+                .ok_or(Error::NoStream("video"))?,
         ),
         None => None,
     };
     let audio_in = match preset.audio() {
-        Some(_) => ictx.streams().best(Type::Audio).map(|s| s.index()),
+        Some(_) => pick(&ictx, settings.audio_stream, Type::Audio, "audio")?,
         None => None,
     };
     if video_in.is_none() && audio_in.is_none() {
@@ -987,6 +1209,12 @@ fn run_export(
         a.finish(&mut octx)?;
     }
     octx.write_trailer()?;
+    if preset == ExportPreset::Flac {
+        if let Some(a) = apipe.as_ref() {
+            // Best effort: the audio is complete either way.
+            let _ = patch_flac_length(output, a.samples_sent);
+        }
+    }
 
     let frames = vpipe.as_ref().map_or(0, |v| v.frames);
     let end_secs = [

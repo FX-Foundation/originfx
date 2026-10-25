@@ -326,9 +326,17 @@ Run `originfx presets` to see which of these your machine can write.
 | AV1 | CRF 42 / 35 / 28 |
 | ProRes, DNxHR, PCM, FLAC | fixed profile, so quality has no effect |
 
-Lossy audio defaults to 192 kbit/s stereo or 128 kbit/s mono (`--audio-kbps` to change).
-Opus is always 48 kHz. Surround sources are mixed down to stereo. MP4 and MOV files get
-`faststart`, so the index is at the front and they open instantly.
+Lossy audio defaults to 128 kbit/s mono, 192 kbit/s stereo, or 64 kbit/s per channel for
+surround (`--audio-kbps` to change). Opus is always 48 kHz. Surround sources (5.1, 7.1) keep
+their channels in every format that can carry them; MP3 is stereo only, so it mixes down.
+When a file has several audio tracks, the container's default track is used; pick another
+with `--audio-stream <index>` (indices come from `probe`). `--video-stream` does the same
+for video. MP4 and MOV files get `faststart`, so the index is at the front and they open
+instantly.
+
+10-bit sources stay 10-bit when written as H.265, VP9 or AV1. H.264 stays 8-bit unless you
+ask for 10-bit (`ExportSettings::bit_depth(10)`), because many devices cannot play 10-bit
+H.264. You can also force 8-bit. ProRes is always 10-bit.
 
 > These 19 are a sensible starting set, chosen by the engine's author, not a final list.
 > Adding or removing one is a small edit to `crates/media-engine/src/preset.rs` (see
@@ -442,9 +450,9 @@ enforcement. GitHub Actions runs format, lint and tests on every push
 
 Known limits, stated plainly:
 
-- **Colour.** Decoding uses the clip's own YUV matrix and range (BT.601, BT.709 or BT.2020; untagged HD is treated as BT.709, untagged SD as BT.601), and exports keep that matrix and write colour tags on the output. Exports are 8-bit (10-bit for ProRes), so HDR footage (PQ/HLG) keeps its tags but loses precision, and there is no tone mapping. Full colour management belongs in the Render Engine.
-- **Audio export** is stereo or mono; surround is mixed down.
-- **FLAC exports** carry no total length in their header, so some tools show no duration. The audio is complete.
+- **Colour.** Decoding uses the clip's own YUV matrix and range (BT.601, BT.709 or BT.2020; untagged video taller than 576 lines is treated as BT.709, smaller as BT.601, the rule players like mpv use), and exports keep that matrix and write colour tags on the output. HDR footage (PQ/HLG) keeps its tags and stays 10-bit on H.265/VP9/AV1, but there is no tone mapping, so HDR clips look flat in the preview. Full colour management belongs in the Render Engine.
+- **Audio** beyond 8 channels is not supported, and only one audio track is exported at a time (mixing tracks belongs to the Audio Engine).
+- **Long GIFs** use one palette per frame instead of one shared palette (over 20 seconds), so colours can flicker slightly. That keeps memory flat.
 - **Trimming** is supported on export (a start and end time). Cutting and joining several clips is the Timeline Engine's job.
 
 Full detail and the licensing note (FFmpeg's x264/x265 are GPL) are in

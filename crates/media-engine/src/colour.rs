@@ -3,8 +3,8 @@
 //! Video is stored as YUV, and the numbers only mean something together with
 //! the matrix (BT.601 for SD, BT.709 for HD, BT.2020 for UHD/HDR) and the range
 //! (limited "TV" 16-235 or full "PC" 0-255) they were encoded with. Many files
-//! do not say, so we follow the same rule players use: HD-sized video is
-//! BT.709, anything smaller is BT.601.
+//! do not say, so we follow the rule players such as mpv use: video taller
+//! than 576 lines (or at least 1280 wide) is BT.709, anything smaller BT.601.
 
 use ffmpeg::color::{Primaries, Range, Space, TransferCharacteristic};
 use ffmpeg_next as ffmpeg;
@@ -78,7 +78,7 @@ pub(crate) fn resolve(
 ) -> Resolved {
     let space = match space {
         Space::Unspecified | Space::Reserved => {
-            if height >= 720 || width >= 1280 {
+            if height > 576 || width >= 1280 {
                 Space::BT709
             } else {
                 Space::SMPTE170M

@@ -23,21 +23,19 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
 
 ## Known limitations (honest list)
 
-* **Colour management.** Decode and export now honour the clip's YUV matrix
-  and range and tag exports. Still missing: 10-bit output for H.264/H.265/VP9,
-  HDR tone mapping, and wide-gamut conversion. HDR sources keep their tags but
-  are written at 8 bit. Full colour management belongs in the Render Engine,
-  where the decoder should hand over native YUV plus colour metadata.
+* **Colour management.** Decode and export honour the clip's YUV matrix and
+  range and tag exports; 10-bit sources stay 10-bit on H.265/VP9/AV1. Still
+  missing: HDR tone mapping for the preview, wide-gamut conversion, and 12-bit
+  output. Full colour management belongs in the Render Engine, where the
+  decoder should hand over native YUV plus colour metadata.
 * **Variable frame rate** is handled exactly by `FrameReader` through a frame
   timestamp index (built automatically when the container reports VFR).
   Export still conforms to constant frame rate.
-* **Audio export is stereo or mono.** Surround sources are downmixed.
+* **Audio:** surround is kept up to 8 channels (MP3 mixes down to stereo), one
+  track is exported at a time, and mixing several tracks is the Audio Engine's job.
 * **No subtitle or chapter handling** beyond listing subtitle streams in probe.
-* **FLAC export** has no total-sample count in its header (FFmpeg's muxer
-  rejects the final metadata packet through this API), so some tools show no
-  duration. Audio data is complete and decodes fine.
-* **GIF export** buffers the palette over the whole clip; fine for short
-  clips, memory-hungry for long ones.
+* **Long GIFs** (over 20 s) use a palette per frame to keep memory flat, so
+  colours can flicker slightly.
 * **Trimming** works on export (start/end). Cutting and joining clips is the Timeline Engine's job.
 * **Hardware encoders are not used**, so exports are CPU-bound. On the 2-core
   cloud machine this was built on, 1080p to 720p H.264 at the Standard preset
