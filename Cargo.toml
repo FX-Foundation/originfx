@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/media-engine", "crates/originfx-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+repository = "https://github.com/FX-Foundation/originfx"
+authors = ["FX Foundation"]
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

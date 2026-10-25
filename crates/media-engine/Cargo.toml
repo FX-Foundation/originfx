@@ -1,0 +1,17 @@
+[package]
+name = "originfx-media-engine"
+description = "OriginFX Media Engine: probe, decode, seek, cache, encode and proxy workflow on top of FFmpeg"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "media_engine"
+
+[dependencies]
+ffmpeg-next = { version = "6.1", default-features = false, features = ["codec", "device", "filter", "format", "software-resampling", "software-scaling"] }
+ffmpeg-sys-next = { version = "6.1", default-features = false }
+thiserror = "2"
+lru = "0.12"
