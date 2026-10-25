@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use media_engine::{
-    hwaccel, probe, Error, ExportPreset, ExportSettings, FrameReader, MediaInfo, ProxyManager,
-    ProxySettings, Quality, VideoDecoder,
+    hwaccel, probe, Error, ExportPreset, ExportSettings, FrameReader, HwMode, MediaInfo,
+    ProxyManager, ProxySettings, Quality, VideoDecoder,
 };
 
 #[derive(Parser)]
@@ -89,6 +89,14 @@ enum Command {
     },
     /// Report which GPU acceleration APIs this machine exposes. Paste the output when reporting GPU issues.
     Hw,
+    /// Check GPU decoding on this machine: compares it with software decoding
+    /// on the same file (picture difference, speed) and says why it is not used if it is not.
+    Hwcheck {
+        file: PathBuf,
+        /// How many frames to compare.
+        #[arg(long, default_value_t = 120)]
+        frames: u64,
+    },
     /// Measure decode speed.
     Bench {
         file: PathBuf,
@@ -98,6 +106,9 @@ enum Command {
         /// Also test random access: seek this many times.
         #[arg(long, default_value_t = 20)]
         seeks: u32,
+        /// Decode on the GPU: `off` (default), `auto`, or a backend name such as `cuda`.
+        #[arg(long, default_value = "off")]
+        hw: String,
     },
 }
 
@@ -246,7 +257,9 @@ fn run(cmd: Command) -> CliResult {
             file,
             frames,
             seeks,
-        } => bench(&file, frames, seeks)?,
+            hw,
+        } => bench(&file, frames, seeks, HwMode::parse(&hw))?,
+        Command::Hwcheck { file, frames } => hwcheck(&file, frames)?,
     }
     Ok(())
 }
@@ -488,16 +501,168 @@ fn print_hw() {
         }
     );
     println!(
-        "note: the engine does not use GPU decode/encode yet; this only reports what is available."
+        "note: GPU decoding is available through `--hw auto` (see `originfx hwcheck <file>` to verify it); GPU encoding is not implemented."
     );
 }
 
-fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
+/// Compare GPU and software decoding of the same clip.
+fn hwcheck(file: &Path, max_frames: u64) -> CliResult {
+    let info = probe(file)?;
+    let v = info.primary_video().ok_or(Error::NoStream("video"))?;
+    println!(
+        "{}  {}x{} {} {}",
+        file.display(),
+        v.width,
+        v.height,
+        v.codec,
+        v.pixel_format
+    );
+
+    println!("\nBackends on this machine:");
+    for b in hwaccel::probe_backends() {
+        if !b.usable {
+            println!(
+                "  {:<14} not usable ({})",
+                b.name,
+                b.error.unwrap_or_default()
+            );
+            continue;
+        }
+        match VideoDecoder::open_with(file, HwMode::Backend(b.name.clone())) {
+            Ok(mut d) => match d.next_frame() {
+                Ok(Some(_)) => println!(
+                    "  {:<14} works for this clip{}",
+                    b.name,
+                    d.hw_fallback_reason()
+                        .map_or(String::new(), |r| format!(" (fell back to software: {r})"))
+                ),
+                Ok(None) => println!("  {:<14} opened but produced no frames", b.name),
+                Err(e) => println!("  {:<14} opened but failed decoding: {e}", b.name),
+            },
+            Err(e) => println!("  {:<14} usable, but not for this clip: {e}", b.name),
+        }
+    }
+
+    let mut sw = VideoDecoder::open(file)?;
+    let mut gpu = VideoDecoder::open_with(file, HwMode::Auto)?;
+    let Some(name) = gpu.hw_backend().map(str::to_owned) else {
+        println!("\nResult: GPU decoding is NOT active for this clip; software decoding is used.");
+        return Ok(());
+    };
+    println!("\nComparing software with GPU ({name}) over up to {max_frames} frames...");
+
+    let (mut t_sw, mut t_gpu) = (0.0f64, 0.0f64);
+    let (mut n, mut sum_diff, mut max_diff, mut sum_px) = (0u64, 0u64, 0u8, 0u64);
+    let mut count_mismatch = false;
+    while n < max_frames {
+        let t = Instant::now();
+        let a = sw.next_frame()?;
+        t_sw += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let b = gpu.next_frame()?;
+        t_gpu += t.elapsed().as_secs_f64();
+        match (a, b) {
+            (Some(a), Some(b)) => {
+                if (a.width, a.height) != (b.width, b.height) {
+                    println!(
+                        "size differs: {}x{} vs {}x{}",
+                        a.width, a.height, b.width, b.height
+                    );
+                    return Ok(());
+                }
+                for (x, y) in a.data.iter().zip(&b.data) {
+                    let d = x.abs_diff(*y);
+                    sum_diff += u64::from(d);
+                    max_diff = max_diff.max(d);
+                }
+                sum_px += a.data.len() as u64;
+                n += 1;
+            }
+            (None, None) => break,
+            _ => {
+                count_mismatch = true;
+                break;
+            }
+        }
+    }
+    let mean = sum_diff as f64 / sum_px.max(1) as f64;
+    println!(
+        "frames compared : {n}{}",
+        if count_mismatch {
+            "  (frame counts DIFFER)"
+        } else {
+            ""
+        }
+    );
+    println!("picture diff    : mean {mean:.2} / 255, worst pixel {max_diff}");
+    println!(
+        "speed           : software {:.1} fps, GPU {:.1} fps ({:.2}x)",
+        n as f64 / t_sw.max(1e-9),
+        n as f64 / t_gpu.max(1e-9),
+        t_sw / t_gpu.max(1e-9)
+    );
+    if let Some(r) = gpu.hw_fallback_reason() {
+        println!("note            : GPU gave up and software took over: {r}");
+    }
+
+    // Random access, compared against software.
+    let dur = info.duration_secs.unwrap_or(0.0);
+    let mut seek_bad = 0;
+    let seeks = 8;
+    if dur > 0.0 {
+        let (mut ts, mut tg) = (0.0f64, 0.0f64);
+        for i in 0..seeks {
+            let at = dur * f64::from((i * 5 + 3) % seeks) / f64::from(seeks);
+            let t = Instant::now();
+            let a = sw.frame_at(at)?;
+            ts += t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            let b = gpu.frame_at(at)?;
+            tg += t.elapsed().as_secs_f64();
+            if let (Some(a), Some(b)) = (a, b) {
+                let d: u64 = a
+                    .data
+                    .iter()
+                    .zip(&b.data)
+                    .map(|(x, y)| u64::from(x.abs_diff(*y)))
+                    .sum();
+                if d as f64 / a.data.len() as f64 > 4.0 || (a.pts_secs - b.pts_secs).abs() > 1e-3 {
+                    seek_bad += 1;
+                }
+            } else {
+                seek_bad += 1;
+            }
+        }
+        println!(
+            "random access   : software {:.0} ms/seek, GPU {:.0} ms/seek, {seek_bad} of {seeks} landed on a different frame or picture",
+            ts * 1000.0 / f64::from(seeks),
+            tg * 1000.0 / f64::from(seeks)
+        );
+    }
+
+    let ok = !count_mismatch && mean < 4.0 && seek_bad == 0;
+    println!(
+        "\nResult: {}",
+        if ok {
+            "PASS - GPU decoding matches software decoding."
+        } else {
+            "FAIL - GPU output differs from software output; see the numbers above."
+        }
+    );
+    Ok(())
+}
+
+fn bench(file: &Path, max_frames: u64, seeks: u32, hw: HwMode) -> CliResult {
     let info = probe(file)?;
     let v = info.primary_video().ok_or(Error::NoStream("video"))?;
     println!("{}  {}x{} {}", file.display(), v.width, v.height, v.codec);
 
-    let mut dec = VideoDecoder::open(file)?;
+    let mut dec = VideoDecoder::open_with(file, hw.clone())?;
+    println!(
+        "decoder: {}",
+        dec.hw_backend()
+            .map_or("software".to_string(), |b| format!("GPU ({b})"))
+    );
     let start = Instant::now();
     let mut n = 0u64;
     while n < max_frames {
@@ -515,7 +680,7 @@ fn bench(file: &Path, max_frames: u64, seeks: u32) -> CliResult {
     if seeks > 0 {
         let dur = info.duration_secs.unwrap_or(0.0);
         if dur > 0.0 {
-            let mut reader = FrameReader::open(file, 64 * 1024 * 1024)?;
+            let mut reader = FrameReader::open_with(file, 64 * 1024 * 1024, hw)?;
             let start = Instant::now();
             for i in 0..seeks {
                 let t = dur * (f64::from((i * 7919) % seeks) / f64::from(seeks));

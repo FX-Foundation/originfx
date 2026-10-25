@@ -65,6 +65,7 @@ pub use cache::{CacheStats, FrameCache, FrameReader};
 pub use colour::ColourInfo;
 pub use decode::{AudioDecoder, AudioOptions, VideoDecoder};
 pub use error::{Error, Result};
+pub use hwaccel::HwMode;
 pub use index::FrameIndex;
 pub use preset::{ExportPreset, Quality};
 pub use probe::probe;
