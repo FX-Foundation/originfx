@@ -46,14 +46,14 @@ flowchart LR
     X --> O[(Output file)]
     F --> PX[ProxyManager]
     PX --> D
-    HW[hwaccel<br/><i>probe only</i>] -.-> D
+    HW[hwaccel<br/><i>GPU decode</i>] -.-> D
 ```
 
 **Design rules**
 
 - **It is a library, not an app.** No windows, no buttons. Other engines call it; the CLI is only a thin front-end for trying it out.
 - **No FFmpeg types in the public API.** The rest of OriginFX never imports FFmpeg, so the backend can change without breaking anything above it.
-- **Correct before fast.** Seeking is frame-accurate, rotation is applied, output is constant frame rate. GPU speed comes later (see [status](#9-status-and-limits)).
+- **Correct before fast.** Seeking is frame-accurate, rotation is applied, output is constant frame rate. GPU decoding is optional and returns exactly the same frames as software (see [GPU decoding](#gpu-decoding)).
 - **Private.** Nothing leaves your machine.
 
 ---
@@ -111,9 +111,12 @@ clip.mp4
   bit rate  : 738 kbit/s
   video #0  : h264 320x180 25.000 fps, yuv420p, 50 frames
   audio #1  : aac 48000 Hz, 2 ch, und
+  subs  #2  : subrip, eng
+  chapter 1 :     0.000s -     4.000s  Intro
 ```
 
-Add `--json` for machine-readable output. Portrait phone clips are reported with their
+Subtitle tracks show their language, title, `default` / `forced` flags, and `picture` for
+picture formats (PGS, DVD) that cannot be read as text. Add `--json` for machine-readable output. Portrait phone clips are reported with their
 rotation, e.g. `rotated 90° (shows as 1080x1920)`.
 
 ### `convert`: change format, size or frame rate
@@ -131,6 +134,9 @@ clip.mp4 -> small.mp4  [MP4 (H.264 + AAC)]  50 frames, 2.0s of media, 61.5 KB in
 | `--fps <n>` | Output frame rate. |
 | `--video-kbps <n>` / `--audio-kbps <n>` | Fixed bitrates (video bitrate overrides quality). |
 | `--start <s>` / `--end <s>` | Keep only this part of the clip, in seconds from the start. Either can be left out. |
+| `--hw <off\|auto\|cuda>` | Encode H.264/H.265 on an NVIDIA GPU (NVENC). `auto` falls back to software, `cuda` fails instead. Default `off`. |
+| `--subtitles` | Copy the source's text subtitle tracks into the output (MKV, MP4, MOV). Text only: styling is dropped and picture subtitles are skipped. Anything left out is listed as a `note:` line. |
+| `--chapters` | Copy chapter markers (MKV, MP4, MOV, M4A). Trimmed exports shift and clip them. |
 
 A progress line is shown while it works. Pressing Ctrl-C stops the process and can leave a
 partial output file, so delete it. (Cancelling through the library's progress callback
@@ -140,7 +146,19 @@ removes the partial file for you.)
 
 ```console
 $ originfx frame clip.mp4 --at 1.0 -o still.png
-saved 320x180 frame at 1.000s to still.png
+saved 320x180 frame at 1.000s to still.png  [decode: software]
+$ originfx frame clip.mp4 --at 1.0 -o still.png --hw auto
+saved 320x180 frame at 1.000s to still.png  [decode: cuda]
+```
+
+`--hw` is `off` (default), `auto` (CUDA, then VA-API, else software), `cuda` or `vaapi`
+(that API or an error). `bench` takes the same option.
+
+### `subtitles`: read a subtitle track
+
+```console
+$ originfx subtitles movie.mkv            # first subtitle track, printed as SRT
+$ originfx subtitles movie.mkv --stream 3 # a specific track (index from `probe`)
 ```
 
 ### `proxy`: a small copy for fast editing
@@ -155,8 +173,8 @@ Running it again prints `existing proxy: ...` and does no work.
 ### `presets`, `hw`, `bench`
 
 - `presets` lists all 19 formats and whether your FFmpeg can write each one.
-- `hw` reports which GPU acceleration APIs your machine exposes (CUDA, VA-API, Quick Sync, Vulkan...) and whether a device can actually be opened. Paste its output when reporting GPU issues. *The engine does not decode on the GPU yet; this is groundwork.*
-- `bench` measures sequential decode speed and random-access cost on a file you choose.
+- `hw` reports which GPU acceleration APIs your machine exposes (CUDA, VA-API, Quick Sync, Vulkan...) and whether a device can actually be opened. Paste its output when reporting GPU issues. The engine decodes with CUDA (NVDEC) and VA-API; it does not encode on the GPU yet.
+- `bench` measures sequential decode speed and random-access cost on a file you choose. Add `--hw auto` (or `cuda`, `vaapi`) to measure GPU decoding; it prints which backend was used.
 
 ---
 
@@ -215,6 +233,34 @@ Frames come back as `Arc<VideoFrame>`: handing one to the renderer costs nothing
 evicting it from the cache never invalidates a copy someone is still using. Asking for a
 frame past the end returns the last frame.
 
+### GPU decoding
+
+Decoding stays in software unless you ask. `VideoDecoder::open_with` and
+`FrameReader::open_with` (and `open_exact_with`) take `DecodeOptions`:
+
+```rust
+use media_engine::{DecodeOptions, FrameReader, HwApi, HwPolicy, VideoDecoder};
+
+let auto = DecodeOptions { hw: HwPolicy::Auto };            // CUDA, then VA-API, else software
+let mut reader = FrameReader::open_with("clip.mp4", 512 * 1024 * 1024, auto)?;
+let frame = reader.frame_at(12.480)?;
+println!("{:?}", reader.decoder().hw_backend());           // Some(Cuda), or None for software
+
+let strict = DecodeOptions { hw: HwPolicy::Require(HwApi::Vaapi) }; // VA-API or an error
+let mut dec = VideoDecoder::open_with("clip.mp4", strict)?;
+```
+
+- **Same frames.** Each GPU frame is copied back to system memory and converted to RGBA by
+  the same code as software, so frames are byte-identical (the tests check this) and seeking,
+  rotation, colour handling and the frame cache behave exactly as before.
+- **`Auto` never fails because of the GPU.** If no device opens, the GPU cannot decode the
+  codec, or a frame fails to come back, it continues in software from the same frame.
+  `hw_backend()` says what is in use (settled after the first frame) and
+  `hw_fallback_reason()` says why the GPU is not.
+- **`Require(api)`** returns `Error::Unsupported` instead of falling back.
+- Only 8- and 10-bit 4:2:0 video goes to the GPU; 4:2:2, 4:4:4 and RGB stay in software.
+- Export still decodes in software.
+
 ### Audio
 
 ```rust
@@ -243,6 +289,21 @@ let report = export("in.mov", "out.webm", &settings)?;
 println!("{} frames, {} bytes", report.frames, report.output_bytes);
 ```
 
+On an NVIDIA GPU, the H.264 and H.265 presets can encode with NVENC:
+
+```rust
+use media_engine::HwPolicy;
+
+let settings = ExportSettings::new(ExportPreset::Mp4H265).hw_encode(HwPolicy::Auto);
+let report = export("in.mov", "out.mp4", &settings)?;
+println!("{:?} {:?}", report.video_encoder, report.hw_fallback_reason); // Some("hevc_nvenc"), None
+```
+
+`Auto` uses software when NVENC cannot be used (other presets, 10-bit H.264, no NVIDIA GPU,
+frames smaller than NVENC's minimum, or an NVENC error part-way, in which case the export
+starts again in software). `HwPolicy::Require(HwApi::Cuda)` returns the error instead.
+Decoding during export stays in software.
+
 With progress and cancellation:
 
 ```rust
@@ -251,6 +312,45 @@ media_engine::export_with_progress("in.mov", "out.mp4", &settings, |p| {
     true // return false to cancel: the partial file is deleted and you get Error::Cancelled
 })?;
 ```
+
+### Subtitles and chapters
+
+```rust
+use media_engine::{probe, read_subtitles};
+
+let info = probe("movie.mkv")?;
+for ch in &info.chapters {
+    println!("{:.1}s  {:?}", ch.start_secs, ch.title);
+}
+let track = info.subtitles[0].index;
+for cue in read_subtitles("movie.mkv", track)? {
+    println!("{:.2} -> {:.2}  {}", cue.start_secs, cue.end_secs, cue.text);
+}
+```
+
+Cue times use the same time zero as the video and audio decoders. Cues are plain text:
+styling and positioning are dropped, and picture subtitles (PGS, DVD, DVB) are reported by
+`probe` (`text_based: false`) but cannot be read.
+
+To carry them into an export, opt in (both default to off, so existing exports are unchanged):
+
+```rust
+let settings = ExportSettings::new(ExportPreset::MkvH264).subtitles(true).chapters(true);
+let report = export("in.mkv", "out.mkv", &settings)?;
+println!("{} subtitle tracks, {} chapters, notes: {:?}",
+         report.subtitle_tracks, report.chapters, report.notes);
+```
+
+| Output | Subtitles | Chapters |
+|---|---|---|
+| MKV | yes (as SRT) | yes |
+| MP4 / MOV | yes (as `mov_text`) | yes |
+| M4A | no (audio only) | yes |
+| WebM, AVI, GIF, MP3, WAV, FLAC, Ogg | no, `report.notes` says so | no |
+
+Trimmed exports shift cues and chapters to the new start and drop what falls outside. A
+track that cannot be carried over (a picture format, or a container that cannot hold
+subtitles) is skipped and explained in `report.notes`; the export itself still succeeds.
 
 ### Proxies
 
@@ -357,7 +457,7 @@ crates/media-engine/src/
 ├── preset.rs     ExportPreset table: container, encoders, defaults
 ├── transcode.rs  the export pipeline
 ├── proxy.rs      ProxyManager
-└── hwaccel.rs    GPU API discovery
+└── hwaccel.rs    GPU API discovery and GPU decode setup
 ```
 
 ### The export pipeline
@@ -379,7 +479,19 @@ Compressed video can only be decoded starting from a keyframe, so "go to 00:12.4
 "jump to the keyframe before it, then decode forward and return the frame that is on
 screen at that moment". Some container formats (MPEG-TS especially) land between
 keyframes when seeking, which would silently return a frame up to a whole GOP late. The
-decoder detects this and steps back until it starts early enough.
+decoder detects this and steps back until it starts early enough. If even a seek to time
+zero lands late or finds nothing (MPEG-TS with B-frames lists no keyframe at or before the
+start), the file is reopened from its first packet.
+
+While it runs forward from the keyframe to the target, a software decoder skips frames that
+no other frame refers to (many B-frames). The frames that matter are untouched, so the
+result is identical, only quicker. It decodes everything again in the last second before the
+target, so the frame on screen is never a skipped one. GPU decoding does not use this.
+
+`FrameReader` also notices when you scrub backwards, which is the slow direction because
+the decoder can only run forward from a keyframe. On such a step it starts a few frames
+earlier and keeps the frames on the way (up to 16, and never more than a third of the cache
+budget), so the next steps back are cache hits. With a small cache it behaves as before.
 
 ### Time
 
@@ -411,14 +523,72 @@ numbers.
 | Export 1080p → 720p H.264, Standard quality | 20 s of video in **9.9 s**, about 2× real time |
 | Generate a 540p proxy of that clip | **4.4 s** |
 
-Exports are CPU-bound today because GPU encoders are not used yet.
+Exports are CPU-bound unless NVENC is used (see below).
+
+### Random access in long-GOP 4K
+
+A 4K H.264 clip with a keyframe every 250 frames and B-frames (24 s, 2-core cloud machine,
+software decoding). `originfx bench clip.mp4 --seeks 20 --scrub 48 --cache-mb 700`:
+
+| Task | Before | Now |
+|---|---|---|
+| Jump to a random frame | 890 ms | **about 660 ms** (skipping unreferenced frames) |
+| Step back one frame at a time, 64 MB cache | 570 ms per step | 570 ms (cache too small to help) |
+| Step back one frame at a time, 700 MB cache | 570 ms per step | **about 90 ms per step** |
+
+How much the first change saves depends on the clip: it can only skip frames nothing refers
+to, so footage without B-frames sees no gain. The backward-scrubbing gain needs a cache of
+about 20 frames; at 4K that is hundreds of MB, so the editor should size the cache for it.
+
+### GPU decoding
+
+Measured on a **laptop with an NVIDIA RTX 3050 Laptop GPU (CUDA/NVDEC) and an Intel iGPU
+(VA-API, iHD driver)**, 12 CPU threads, release build, 20-second 30 fps test clips with a
+keyframe every 2 s. Sequential is 600 frames including the RGBA conversion; random access
+is 20 jumps through `FrameReader`; CPU is total CPU time for the whole `bench` run. One run
+each, so expect ±20% (the CPU was in power-save mode).
+
+| Clip | Software | CUDA | VA-API |
+|---|---|---|---|
+| 1080p H.264 | 104 fps · 48 ms · 16 s CPU | 64 fps · 62 ms · 10 s CPU | 81 fps · 47 ms · 7 s CPU |
+| 1080p VP9 | 128 fps · 91 ms · 14 s CPU | 92 fps · 34 ms · 7 s CPU | 77 fps · 24 ms · 8 s CPU |
+| 4K HEVC 10-bit | 27 fps · 462 ms · 126 s CPU | 28 fps · 94 ms · 21 s CPU | 16 fps · 175 ms · 37 s CPU |
+| 4K AV1 | 46 fps · 284 ms · 55 s CPU | 35 fps · 80 ms · 16 s CPU | not supported by this iGPU |
+
+What this means:
+
+- **Random access is where the GPU wins**: 3-5x faster on 4K, because the frames skipped
+  on the way to the target never leave the GPU.
+- **CPU use drops 2-6x**, leaving the CPU for effects, audio and the UI.
+- **Sequential speed is limited by the RGBA conversion**, which runs on one CPU thread for
+  both paths (about 20-40 ms per 4K frame). A 12-thread CPU decodes in parallel with it,
+  so software can be as fast or faster; the GPU path also has to copy each frame back.
+  Removing that copy needs zero-copy hand-off to the Render Engine.
+- `Auto` tries CUDA first, which was the faster GPU here.
+
+### GPU encoding (NVENC)
+
+Same laptop and clips, `originfx convert` at Standard quality, one run each. Quality is
+PSNR (luma) of the output against its source; higher is better.
+
+| Export | Software | NVENC | Speed-up |
+|---|---|---|---|
+| 1080p → H.264 | 6.8 s · 18.1 MB · 47.3 dB · 57 s CPU | 2.6 s · 19.3 MB · 47.9 dB · 13 s CPU | 2.6x |
+| 1080p → H.265 | 31.7 s · 17.2 MB · 45.7 dB · 145 s CPU | 2.1 s · 16.6 MB · 45.6 dB · 10 s CPU | 15x |
+| 4K 10-bit → H.265 10-bit | 112.8 s · 62.4 MB · 45.6 dB · 641 s CPU | 15.4 s · 63.0 MB · 45.7 dB · 97 s CPU | 7.3x |
+| 4K 10-bit → H.264 8-bit | 29.3 s · 56.7 MB · 44.6 dB · 285 s CPU | 12.8 s · 71.6 MB · 46.2 dB · 91 s CPU | 2.3x |
+| 1080p → 720p H.264 | 2.65 s · 5.1 MB | 1.85 s · 7.8 MB | 1.4x |
+
+H.265 gains the most because x265 is slow; NVENC matches its quality and size. For H.264,
+NVENC files are larger for the same quality. Decoding and scaling still run on the CPU,
+which is what limits the 4K and 720p exports.
 
 ---
 
 ## 8. Testing
 
 ```bash
-cargo test            # 38 tests
+cargo test            # 93 tests; GPU tests skip themselves without a GPU
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
@@ -430,6 +600,11 @@ The key fixture is a clip where **frame *N* is a solid colour that encodes *N***
 decodes a frame, reads its colour, and knows exactly which frame it got. That is how
 seeking accuracy is proven at keyframe boundaries, just before and after them, backwards
 jumps, and the final frame, including MPEG-TS files with a start offset.
+
+Seeking is also checked on long-GOP clips with real B-frames (a lossless x264 encode writes
+none, so those clips use near-lossless), against the same self-numbering frames, and a
+deliberately wrong skip margin makes that test fail. Subtitles and chapters are tested end to
+end (MKV and MP4, ASS and SRT sources, trimmed exports, formats that cannot hold them).
 
 Also covered: all 19 presets, 10-bit HEVC, odd-sized video, mono audio, portrait rotation,
 truncated and garbage files, cancelling an export, proxy invalidation, and memory-budget
@@ -443,7 +618,10 @@ enforcement. GitHub Actions runs format, lint and tests on every push
 | Area | Status |
 |---|---|
 | Probe · decode · seek · cache · export · proxies · rotation | **Done and tested** |
-| GPU decode/encode (NVDEC/NVENC, VA-API, Quick Sync) | **Not yet.** `hwaccel` only reports what exists. Needs real hardware to develop against. |
+| GPU decode (NVDEC via CUDA, VA-API) | **Done and tested** on an NVIDIA RTX 3050 Laptop and Intel VA-API (iHD). Off by default. |
+| GPU encode, NVENC for the H.264 and H.265 presets | **Done and tested** on an NVIDIA RTX 3050 Laptop. Off by default. |
+| GPU encode with VA-API / Quick Sync, other codecs | **Not yet.** |
+| Subtitles and chapters (read, and carry through MKV / MP4 / MOV export) | **Done and tested.** Text only; picture subtitles are not supported. |
 | Zero-copy hand-off to wgpu | **Not yet.** Needs the Render Engine. |
 | Cinema RAW (RED, ARRI, Blackmagic) | **Not in the engine.** Planned as optional plugins. |
 | Project interchange (EDL, OTIO, FCPXML, AAF) | **Not started.** Needs the Timeline Engine. |
@@ -451,6 +629,8 @@ enforcement. GitHub Actions runs format, lint and tests on every push
 Known limits, stated plainly:
 
 - **Colour.** Decoding uses the clip's own YUV matrix and range (BT.601, BT.709 or BT.2020; untagged video taller than 576 lines is treated as BT.709, smaller as BT.601, the rule players like mpv use), and exports keep that matrix and write colour tags on the output. HDR footage (PQ/HLG) keeps its tags and stays 10-bit on H.265/VP9/AV1, but there is no tone mapping, so HDR clips look flat in the preview. Full colour management belongs in the Render Engine.
+- **VA-API and 4K AV1.** On the Intel iGPU used for testing, VA-API cannot decode 4K AV1. With `HwPolicy::Auto` the engine quietly decodes in software and `hw_fallback_reason()` says why; with `Require(HwApi::Vaapi)` you get the error. Other GPUs were not tested and may well work. CUDA (NVDEC) decoded the same clip fine.
+- **Subtitles** are plain text only. Styling, positioning and picture subtitles (PGS, DVD, DVB) are not carried over, and WebM, AVI and audio-only formats cannot hold them here.
 - **Audio** beyond 8 channels is not supported, and only one audio track is exported at a time (mixing tracks belongs to the Audio Engine).
 - **Long GIFs** use one palette per frame instead of one shared palette (over 20 seconds), so colours can flicker slightly. That keeps memory flat.
 - **Trimming** is supported on export (a start and end time). Cutting and joining several clips is the Timeline Engine's job.
@@ -474,6 +654,7 @@ Full detail and the licensing note (FFmpeg's x264/x265 are GPL) are in
 | Tests print `skipping: ffmpeg command line tool not found` | `sudo apt install ffmpeg` |
 | Need to see what FFmpeg is doing | `ORIGINFX_FFMPEG_LOG=debug originfx ...` |
 | `originfx hw` shows everything as `[no]` | Normal on machines without matching drivers; the error text next to each entry says why. |
+| `--hw auto` prints `software (GPU not used: ...)` | The text says why: no device, a codec or format this GPU cannot decode, or a GPU error. Decoding carries on in software. |
 
 ---
 

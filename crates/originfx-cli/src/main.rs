@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use media_engine::{
-    hwaccel, probe, Error, ExportPreset, ExportSettings, FrameReader, HwMode, MediaInfo,
-    ProxyManager, ProxySettings, Quality, VideoDecoder,
+    hwaccel, probe, DecodeOptions, Error, ExportPreset, ExportSettings, FrameReader, HwApi,
+    HwPolicy, MediaInfo, ProxyManager, ProxySettings, Quality, VideoDecoder,
 };
 
 #[derive(Parser)]
@@ -66,6 +66,23 @@ enum Command {
         /// Use this audio track (index from `probe`).
         #[arg(long)]
         audio_stream: Option<usize>,
+        /// GPU video encoding (NVENC, H.264/H.265 presets): off, auto (NVENC, else
+        /// software) or cuda (NVENC or an error). vaapi is not supported yet.
+        #[arg(long, value_enum, default_value = "off")]
+        hw: HwArg,
+        /// Copy text subtitle tracks into the output (MKV and MP4/MOV).
+        #[arg(long)]
+        subtitles: bool,
+        /// Copy chapter markers into the output (MKV, MP4, MOV, M4A).
+        #[arg(long)]
+        chapters: bool,
+    },
+    /// Print a text subtitle track as SRT.
+    Subtitles {
+        file: PathBuf,
+        /// Subtitle stream index from `probe`; the first subtitle track if omitted.
+        #[arg(long)]
+        stream: Option<usize>,
     },
     /// List export presets and whether this machine's FFmpeg can produce them.
     Presets,
@@ -77,6 +94,9 @@ enum Command {
         at: f64,
         #[arg(short, long, default_value = "frame.png")]
         out: PathBuf,
+        /// GPU decoding: off, auto (try CUDA then VA-API, else software), cuda or vaapi.
+        #[arg(long, value_enum, default_value = "off")]
+        hw: HwArg,
     },
     /// Create (or find) the low-resolution proxy for a file.
     Proxy {
@@ -89,14 +109,6 @@ enum Command {
     },
     /// Report which GPU acceleration APIs this machine exposes. Paste the output when reporting GPU issues.
     Hw,
-    /// Check GPU decoding on this machine: compares it with software decoding
-    /// on the same file (picture difference, speed) and says why it is not used if it is not.
-    Hwcheck {
-        file: PathBuf,
-        /// How many frames to compare.
-        #[arg(long, default_value_t = 120)]
-        frames: u64,
-    },
     /// Measure decode speed.
     Bench {
         file: PathBuf,
@@ -106,9 +118,15 @@ enum Command {
         /// Also test random access: seek this many times.
         #[arg(long, default_value_t = 20)]
         seeks: u32,
-        /// Decode on the GPU: `off` (default), `auto`, or a backend name such as `cuda`.
-        #[arg(long, default_value = "off")]
-        hw: String,
+        /// Also test scrubbing backwards: step back one frame at a time this many times.
+        #[arg(long, default_value_t = 0)]
+        scrub: u32,
+        /// Frame cache size for the random access and scrub tests, in MB.
+        #[arg(long, default_value_t = 64)]
+        cache_mb: usize,
+        /// GPU decoding: off, auto (try CUDA then VA-API, else software), cuda or vaapi.
+        #[arg(long, value_enum, default_value = "off")]
+        hw: HwArg,
     },
 }
 
@@ -117,6 +135,40 @@ enum QualityArg {
     Draft,
     Standard,
     High,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum HwArg {
+    Off,
+    Auto,
+    Cuda,
+    Vaapi,
+}
+
+impl From<HwArg> for HwPolicy {
+    fn from(hw: HwArg) -> Self {
+        match hw {
+            HwArg::Off => HwPolicy::Off,
+            HwArg::Auto => HwPolicy::Auto,
+            HwArg::Cuda => HwPolicy::Require(HwApi::Cuda),
+            HwArg::Vaapi => HwPolicy::Require(HwApi::Vaapi),
+        }
+    }
+}
+
+impl From<HwArg> for DecodeOptions {
+    fn from(hw: HwArg) -> Self {
+        DecodeOptions { hw: hw.into() }
+    }
+}
+
+/// "cuda", or "software" plus the reason the GPU was not used when it was asked for.
+fn backend_label(dec: &VideoDecoder) -> String {
+    match (dec.hw_backend(), dec.hw_fallback_reason()) {
+        (Some(api), _) => api.to_string(),
+        (None, Some(why)) => format!("software (GPU not used: {why})"),
+        (None, None) => "software".to_string(),
+    }
 }
 
 impl From<QualityArg> for Quality {
@@ -165,6 +217,9 @@ fn run(cmd: Command) -> CliResult {
             end,
             video_stream,
             audio_stream,
+            hw,
+            subtitles,
+            chapters,
         } => {
             let preset = match preset {
                 Some(id) => ExportPreset::from_id(&id)
@@ -180,6 +235,9 @@ fn run(cmd: Command) -> CliResult {
             s.end_secs = end;
             s.video_stream = video_stream;
             s.audio_stream = audio_stream;
+            s.hw_encode = hw.into();
+            s.subtitles = subtitles;
+            s.chapters = chapters;
 
             let tty = std::io::stderr().is_terminal();
             let report = media_engine::export_with_progress(&input, &output, &s, |p| {
@@ -210,6 +268,44 @@ fn run(cmd: Command) -> CliResult {
                 human_bytes(report.output_bytes),
                 report.elapsed.as_secs_f64()
             );
+            if let Some(enc) = &report.video_encoder {
+                match &report.hw_fallback_reason {
+                    Some(why) => println!("video encoder: {enc} (GPU not used: {why})"),
+                    None => println!("video encoder: {enc}"),
+                }
+            }
+            if report.subtitle_tracks > 0 {
+                println!("subtitle tracks: {}", report.subtitle_tracks);
+            }
+            if report.chapters > 0 {
+                println!("chapters: {}", report.chapters);
+            }
+            for note in &report.notes {
+                println!("note: {note}");
+            }
+        }
+        Command::Subtitles { file, stream } => {
+            let info = media_engine::probe(&file)?;
+            let index = match stream {
+                Some(i) => i,
+                None => info
+                    .subtitles
+                    .first()
+                    .map(|s| s.index)
+                    .ok_or("this file has no subtitle tracks")?,
+            };
+            for (n, cue) in media_engine::read_subtitles(&file, index)?
+                .iter()
+                .enumerate()
+            {
+                println!(
+                    "{}\n{} --> {}\n{}\n",
+                    n + 1,
+                    srt_time(cue.start_secs),
+                    srt_time(cue.end_secs),
+                    cue.text
+                );
+            }
         }
         Command::Presets => {
             println!("{:<18} {:<5} {:<30} available", "id", "ext", "description");
@@ -227,16 +323,17 @@ fn run(cmd: Command) -> CliResult {
                 );
             }
         }
-        Command::Frame { file, at, out } => {
-            let mut reader = FrameReader::open(&file, 256 * 1024 * 1024)?;
+        Command::Frame { file, at, out, hw } => {
+            let mut reader = FrameReader::open_with(&file, 256 * 1024 * 1024, hw.into())?;
             let frame = reader.frame_at(at)?;
             png::write_rgba(&out, frame.width, frame.height, &frame.data)?;
             println!(
-                "saved {}x{} frame at {:.3}s to {}",
+                "saved {}x{} frame at {:.3}s to {}  [decode: {}]",
                 frame.width,
                 frame.height,
                 frame.pts_secs,
-                out.display()
+                out.display(),
+                backend_label(reader.decoder())
             );
         }
         Command::Proxy { file, dir, height } => {
@@ -257,9 +354,10 @@ fn run(cmd: Command) -> CliResult {
             file,
             frames,
             seeks,
+            scrub,
+            cache_mb,
             hw,
-        } => bench(&file, frames, seeks, HwMode::parse(&hw))?,
-        Command::Hwcheck { file, frames } => hwcheck(&file, frames)?,
+        } => bench(&file, frames, seeks, scrub, cache_mb, hw.into())?,
     }
     Ok(())
 }
@@ -377,15 +475,54 @@ fn print_info(info: &MediaInfo) {
         );
     }
     for s in &info.subtitles {
+        let mut tags = Vec::new();
+        if let Some(l) = &s.language {
+            tags.push(l.clone());
+        }
+        if let Some(t) = &s.title {
+            tags.push(format!("\"{t}\""));
+        }
+        if s.default {
+            tags.push("default".into());
+        }
+        if s.forced {
+            tags.push("forced".into());
+        }
+        if !s.text_based {
+            tags.push("picture".into());
+        }
         println!(
             "  subs  #{:<2} : {}{}",
             s.index,
             s.codec,
-            s.language
-                .as_deref()
-                .map_or(String::new(), |l| format!(", {l}"))
+            if tags.is_empty() {
+                String::new()
+            } else {
+                format!(", {}", tags.join(", "))
+            }
         );
     }
+    for (n, c) in info.chapters.iter().enumerate() {
+        println!(
+            "  chapter {:<2} : {:>9.3}s - {:>9.3}s  {}",
+            n + 1,
+            c.start_secs,
+            c.end_secs,
+            c.title.as_deref().unwrap_or("")
+        );
+    }
+}
+
+/// `1.5` -> `00:00:01,500`.
+fn srt_time(secs: f64) -> String {
+    let ms = (secs.max(0.0) * 1000.0).round() as u64;
+    format!(
+        "{:02}:{:02}:{:02},{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    )
 }
 
 fn json_str(s: &str) -> String {
@@ -451,10 +588,26 @@ fn info_json(i: &MediaInfo) -> String {
         .iter()
         .map(|s| {
             format!(
-                "{{\"index\":{},\"codec\":{},\"language\":{}}}",
+                "{{\"index\":{},\"codec\":{},\"language\":{},\"title\":{},\"text_based\":{},\"default\":{},\"forced\":{}}}",
                 s.index,
                 json_str(&s.codec),
-                s.language.as_deref().map_or("null".to_string(), json_str)
+                s.language.as_deref().map_or("null".to_string(), json_str),
+                s.title.as_deref().map_or("null".to_string(), json_str),
+                s.text_based,
+                s.default,
+                s.forced
+            )
+        })
+        .collect();
+    let chapters: Vec<String> = i
+        .chapters
+        .iter()
+        .map(|c| {
+            format!(
+                "{{\"start_secs\":{},\"end_secs\":{},\"title\":{}}}",
+                c.start_secs,
+                c.end_secs,
+                c.title.as_deref().map_or("null".to_string(), json_str)
             )
         })
         .collect();
@@ -464,7 +617,7 @@ fn info_json(i: &MediaInfo) -> String {
         .map(|(k, v)| format!("{}:{}", json_str(k), json_str(v)))
         .collect();
     format!(
-        "{{\"path\":{},\"format\":{},\"format_long\":{},\"size_bytes\":{},\"duration_secs\":{},\"bit_rate\":{},\"video\":[{}],\"audio\":[{}],\"subtitles\":[{}],\"metadata\":{{{}}}}}",
+        "{{\"path\":{},\"format\":{},\"format_long\":{},\"size_bytes\":{},\"duration_secs\":{},\"bit_rate\":{},\"video\":[{}],\"audio\":[{}],\"subtitles\":[{}],\"chapters\":[{}],\"metadata\":{{{}}}}}",
         json_str(&i.path.to_string_lossy()),
         json_str(&i.format_name),
         json_str(&i.format_long_name),
@@ -474,6 +627,7 @@ fn info_json(i: &MediaInfo) -> String {
         video.join(","),
         audio.join(","),
         subs.join(","),
+        chapters.join(","),
         meta.join(",")
     )
 }
@@ -501,168 +655,23 @@ fn print_hw() {
         }
     );
     println!(
-        "note: GPU decoding is available through `--hw auto` (see `originfx hwcheck <file>` to verify it); GPU encoding is not implemented."
+        "note: GPU decoding (cuda, vaapi) is used with --hw on `frame` and `bench`; NVENC encoding with --hw on `convert`."
     );
 }
 
-/// Compare GPU and software decoding of the same clip.
-fn hwcheck(file: &Path, max_frames: u64) -> CliResult {
-    let info = probe(file)?;
-    let v = info.primary_video().ok_or(Error::NoStream("video"))?;
-    println!(
-        "{}  {}x{} {} {}",
-        file.display(),
-        v.width,
-        v.height,
-        v.codec,
-        v.pixel_format
-    );
-
-    println!("\nBackends on this machine:");
-    for b in hwaccel::probe_backends() {
-        if !b.usable {
-            println!(
-                "  {:<14} not usable ({})",
-                b.name,
-                b.error.unwrap_or_default()
-            );
-            continue;
-        }
-        match VideoDecoder::open_with(file, HwMode::Backend(b.name.clone())) {
-            Ok(mut d) => match d.next_frame() {
-                Ok(Some(_)) => println!(
-                    "  {:<14} works for this clip{}",
-                    b.name,
-                    d.hw_fallback_reason()
-                        .map_or(String::new(), |r| format!(" (fell back to software: {r})"))
-                ),
-                Ok(None) => println!("  {:<14} opened but produced no frames", b.name),
-                Err(e) => println!("  {:<14} opened but failed decoding: {e}", b.name),
-            },
-            Err(e) => println!("  {:<14} usable, but not for this clip: {e}", b.name),
-        }
-    }
-
-    let mut sw = VideoDecoder::open(file)?;
-    let mut gpu = VideoDecoder::open_with(file, HwMode::Auto)?;
-    let Some(name) = gpu.hw_backend().map(str::to_owned) else {
-        println!("\nResult: GPU decoding is NOT active for this clip; software decoding is used.");
-        return Ok(());
-    };
-    println!("\nComparing software with GPU ({name}) over up to {max_frames} frames...");
-
-    let (mut t_sw, mut t_gpu) = (0.0f64, 0.0f64);
-    let (mut n, mut sum_diff, mut max_diff, mut sum_px) = (0u64, 0u64, 0u8, 0u64);
-    let mut count_mismatch = false;
-    while n < max_frames {
-        let t = Instant::now();
-        let a = sw.next_frame()?;
-        t_sw += t.elapsed().as_secs_f64();
-        let t = Instant::now();
-        let b = gpu.next_frame()?;
-        t_gpu += t.elapsed().as_secs_f64();
-        match (a, b) {
-            (Some(a), Some(b)) => {
-                if (a.width, a.height) != (b.width, b.height) {
-                    println!(
-                        "size differs: {}x{} vs {}x{}",
-                        a.width, a.height, b.width, b.height
-                    );
-                    return Ok(());
-                }
-                for (x, y) in a.data.iter().zip(&b.data) {
-                    let d = x.abs_diff(*y);
-                    sum_diff += u64::from(d);
-                    max_diff = max_diff.max(d);
-                }
-                sum_px += a.data.len() as u64;
-                n += 1;
-            }
-            (None, None) => break,
-            _ => {
-                count_mismatch = true;
-                break;
-            }
-        }
-    }
-    let mean = sum_diff as f64 / sum_px.max(1) as f64;
-    println!(
-        "frames compared : {n}{}",
-        if count_mismatch {
-            "  (frame counts DIFFER)"
-        } else {
-            ""
-        }
-    );
-    println!("picture diff    : mean {mean:.2} / 255, worst pixel {max_diff}");
-    println!(
-        "speed           : software {:.1} fps, GPU {:.1} fps ({:.2}x)",
-        n as f64 / t_sw.max(1e-9),
-        n as f64 / t_gpu.max(1e-9),
-        t_sw / t_gpu.max(1e-9)
-    );
-    if let Some(r) = gpu.hw_fallback_reason() {
-        println!("note            : GPU gave up and software took over: {r}");
-    }
-
-    // Random access, compared against software.
-    let dur = info.duration_secs.unwrap_or(0.0);
-    let mut seek_bad = 0;
-    let seeks = 8;
-    if dur > 0.0 {
-        let (mut ts, mut tg) = (0.0f64, 0.0f64);
-        for i in 0..seeks {
-            let at = dur * f64::from((i * 5 + 3) % seeks) / f64::from(seeks);
-            let t = Instant::now();
-            let a = sw.frame_at(at)?;
-            ts += t.elapsed().as_secs_f64();
-            let t = Instant::now();
-            let b = gpu.frame_at(at)?;
-            tg += t.elapsed().as_secs_f64();
-            if let (Some(a), Some(b)) = (a, b) {
-                let d: u64 = a
-                    .data
-                    .iter()
-                    .zip(&b.data)
-                    .map(|(x, y)| u64::from(x.abs_diff(*y)))
-                    .sum();
-                if d as f64 / a.data.len() as f64 > 4.0 || (a.pts_secs - b.pts_secs).abs() > 1e-3 {
-                    seek_bad += 1;
-                }
-            } else {
-                seek_bad += 1;
-            }
-        }
-        println!(
-            "random access   : software {:.0} ms/seek, GPU {:.0} ms/seek, {seek_bad} of {seeks} landed on a different frame or picture",
-            ts * 1000.0 / f64::from(seeks),
-            tg * 1000.0 / f64::from(seeks)
-        );
-    }
-
-    let ok = !count_mismatch && mean < 4.0 && seek_bad == 0;
-    println!(
-        "\nResult: {}",
-        if ok {
-            "PASS - GPU decoding matches software decoding."
-        } else {
-            "FAIL - GPU output differs from software output; see the numbers above."
-        }
-    );
-    Ok(())
-}
-
-fn bench(file: &Path, max_frames: u64, seeks: u32, hw: HwMode) -> CliResult {
+fn bench(
+    file: &Path,
+    max_frames: u64,
+    seeks: u32,
+    scrub: u32,
+    cache_mb: usize,
+    options: DecodeOptions,
+) -> CliResult {
     let info = probe(file)?;
     let v = info.primary_video().ok_or(Error::NoStream("video"))?;
     println!("{}  {}x{} {}", file.display(), v.width, v.height, v.codec);
 
-    let mut dec = VideoDecoder::open_with(file, hw.clone())?;
-    println!(
-        "decoder: {}",
-        dec.hw_backend()
-            .map_or("software".to_string(), |b| format!("GPU ({b})"))
-    );
+    let mut dec = VideoDecoder::open_with(file, options)?;
     let start = Instant::now();
     let mut n = 0u64;
     while n < max_frames {
@@ -672,6 +681,7 @@ fn bench(file: &Path, max_frames: u64, seeks: u32, hw: HwMode) -> CliResult {
         n += 1;
     }
     let secs = start.elapsed().as_secs_f64().max(1e-9);
+    println!("decode backend: {}", backend_label(&dec));
     println!(
         "sequential decode (incl. RGBA convert): {n} frames in {secs:.2}s = {:.1} fps",
         n as f64 / secs
@@ -680,7 +690,7 @@ fn bench(file: &Path, max_frames: u64, seeks: u32, hw: HwMode) -> CliResult {
     if seeks > 0 {
         let dur = info.duration_secs.unwrap_or(0.0);
         if dur > 0.0 {
-            let mut reader = FrameReader::open_with(file, 64 * 1024 * 1024, hw)?;
+            let mut reader = FrameReader::open_with(file, cache_mb * 1024 * 1024, options)?;
             let start = Instant::now();
             for i in 0..seeks {
                 let t = dur * (f64::from((i * 7919) % seeks) / f64::from(seeks));
@@ -688,8 +698,29 @@ fn bench(file: &Path, max_frames: u64, seeks: u32, hw: HwMode) -> CliResult {
             }
             let secs = start.elapsed().as_secs_f64();
             println!(
-                "random access: {seeks} seeks in {secs:.2}s = {:.1} ms per frame",
-                secs * 1000.0 / f64::from(seeks)
+                "random access: {seeks} seeks in {secs:.2}s = {:.1} ms per frame  [decode: {}]",
+                secs * 1000.0 / f64::from(seeks),
+                backend_label(reader.decoder())
+            );
+        }
+    }
+
+    if scrub > 0 {
+        let dur = info.duration_secs.unwrap_or(0.0);
+        if dur > 0.0 {
+            let mut reader = FrameReader::open_with(file, cache_mb * 1024 * 1024, options)?;
+            let top = reader.index_at(dur / 2.0);
+            let steps = u64::from(scrub).min(top);
+            // Land on the starting frame first; only the steps back are timed.
+            reader.frame(top)?;
+            let start = Instant::now();
+            for k in 1..=steps {
+                reader.frame(top - k)?;
+            }
+            let secs = start.elapsed().as_secs_f64();
+            println!(
+                "scrub back: {steps} one-frame steps in {secs:.2}s = {:.1} ms per step  [cache {cache_mb} MB]",
+                secs * 1000.0 / steps.max(1) as f64
             );
         }
     }

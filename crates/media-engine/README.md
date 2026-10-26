@@ -26,7 +26,9 @@ export("clip.mp4", "clip-720p.mp4",
 | Phone portrait rotation (display matrix) | done, tested |
 | Software export, 19 presets, scale, fps conform, progress, cancel | done, all 19 tested here |
 | Proxy workflow (content-addressed, atomic, prune) | done, tested |
-| GPU decode/encode | **not done**: `hwaccel` only reports what exists |
+| Subtitles and chapters (read; carry through MKV and MP4/MOV export) | done, tested; text only |
+| GPU decode (CUDA/NVDEC, VA-API) | done, tested on real hardware; off by default (`DecodeOptions`) |
+| GPU encode (NVENC, H.264/H.265 presets) | done, tested on real hardware; off by default (`ExportSettings::hw_encode`) |
 | Zero-copy hand-off to wgpu | **not done**: needs the Render Engine and a GPU |
 | Cinema RAW | **out of scope for the engine**: future plugin, see `docs/ROADMAP.md` |
 | Project interchange (EDL/OTIO/FCPXML/AAF) | **not started** (needs the Timeline Engine) |
@@ -40,7 +42,7 @@ export("clip.mp4", "clip-720p.mp4",
 | `cache` | `FrameCache`, `FrameReader` |
 | `preset`, `transcode` | `ExportPreset`, `ExportSettings`, `export` |
 | `proxy` | `ProxyManager` |
-| `hwaccel` | GPU API discovery |
+| `hwaccel` | GPU API discovery, GPU decode setup (`HwApi`, `HwPolicy`) |
 | `types`, `error` | plain data types and the error enum |
 
 ## Tests

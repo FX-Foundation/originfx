@@ -6,7 +6,9 @@ use ffmpeg::media::Type;
 use ffmpeg_next as ffmpeg;
 
 use crate::error::{Error, Result};
-use crate::types::{AudioStreamInfo, MediaInfo, Rational, SubtitleStreamInfo, VideoStreamInfo};
+use crate::types::{
+    AudioStreamInfo, Chapter, MediaInfo, Rational, SubtitleStreamInfo, VideoStreamInfo,
+};
 
 /// Open `path` and describe it.
 ///
@@ -77,11 +79,18 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo> {
                     language,
                 });
             }
-            Type::Subtitle => subtitles.push(SubtitleStreamInfo {
-                index: stream.index(),
-                codec,
-                language,
-            }),
+            Type::Subtitle => {
+                let disp = stream.disposition();
+                subtitles.push(SubtitleStreamInfo {
+                    index: stream.index(),
+                    text_based: crate::subtitle::is_text_codec(params.id()),
+                    codec,
+                    language,
+                    title: stream.metadata().get("title").map(str::to_owned),
+                    default: disp.contains(ffmpeg::format::stream::Disposition::DEFAULT),
+                    forced: disp.contains(ffmpeg::format::stream::Disposition::FORCED),
+                });
+            }
             _ => {}
         }
     }
@@ -89,6 +98,20 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo> {
     let container_duration = ictx.duration();
     let duration_secs = (container_duration > 0)
         .then(|| container_duration as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE));
+
+    let chapters = ictx
+        .chapters()
+        .map(|c| {
+            let tb = c.time_base();
+            let secs =
+                |t: i64| t as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator().max(1));
+            Chapter {
+                start_secs: secs(c.start()),
+                end_secs: secs(c.end()),
+                title: c.metadata().get("title").map(str::to_owned),
+            }
+        })
+        .collect();
 
     let metadata = ictx
         .metadata()
@@ -106,6 +129,7 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo> {
         video,
         audio,
         subtitles,
+        chapters,
         metadata,
     })
 }

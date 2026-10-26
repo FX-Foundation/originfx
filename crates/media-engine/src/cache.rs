@@ -5,9 +5,8 @@ use std::sync::Arc;
 
 use lru::LruCache;
 
-use crate::decode::VideoDecoder;
+use crate::decode::{DecodeOptions, VideoDecoder};
 use crate::error::{Error, Result};
-use crate::hwaccel::HwMode;
 use crate::index::FrameIndex;
 use crate::types::VideoFrame;
 
@@ -107,6 +106,15 @@ impl FrameCache {
 /// Seeking restarts from a keyframe, which is usually costlier than this.
 const MAX_FORWARD_DECODE: u64 = 30;
 
+/// A request this many frames (or fewer) before the previous one counts as
+/// scrubbing backwards.
+const SCRUB_WINDOW: u64 = 60;
+
+/// When scrubbing backwards, how many extra frames before the requested one are
+/// decoded and cached, so the next steps back cost nothing. Backwards is the
+/// expensive direction: the decoder can only run forward from a keyframe.
+const SCRUB_PREFETCH_MAX: u64 = 16;
+
 /// Random-access frame reader: a [`VideoDecoder`] fronted by a [`FrameCache`].
 ///
 /// Frames are addressed by index. For constant-frame-rate footage the index is
@@ -123,27 +131,50 @@ pub struct FrameReader {
     next_index: Option<u64>,
     /// Index of the final frame once end of stream has been seen.
     last_index: Option<u64>,
+    /// The frame requested last, to notice backward scrubbing.
+    last_request: Option<u64>,
+    /// Cache budget and the size of one decoded frame, to size the backward prefetch.
+    cache_bytes: usize,
+    frame_bytes: usize,
 }
 
 impl FrameReader {
     /// Open `path` with a cache of `cache_bytes`.
     pub fn open(path: impl AsRef<Path>, cache_bytes: usize) -> Result<Self> {
-        Self::open_inner(path.as_ref(), cache_bytes, false, HwMode::Off)
+        Self::open_inner(path.as_ref(), cache_bytes, false, DecodeOptions::default())
     }
 
-    /// Like [`open`](Self::open), decoding on the GPU when `hw` allows it.
-    pub fn open_with(path: impl AsRef<Path>, cache_bytes: usize, hw: HwMode) -> Result<Self> {
-        Self::open_inner(path.as_ref(), cache_bytes, false, hw)
+    /// Like [`open`](Self::open), with decode options (for example GPU decoding).
+    pub fn open_with(
+        path: impl AsRef<Path>,
+        cache_bytes: usize,
+        options: DecodeOptions,
+    ) -> Result<Self> {
+        Self::open_inner(path.as_ref(), cache_bytes, false, options)
     }
 
     /// Like [`open`](Self::open) but always reads the exact frame times first.
     /// Costs one pass over the file; worth it when frame accuracy matters.
     pub fn open_exact(path: impl AsRef<Path>, cache_bytes: usize) -> Result<Self> {
-        Self::open_inner(path.as_ref(), cache_bytes, true, HwMode::Off)
+        Self::open_inner(path.as_ref(), cache_bytes, true, DecodeOptions::default())
     }
 
-    fn open_inner(path: &Path, cache_bytes: usize, force_index: bool, hw: HwMode) -> Result<Self> {
-        let decoder = VideoDecoder::open_with(path, hw)?;
+    /// Like [`open_exact`](Self::open_exact), with decode options.
+    pub fn open_exact_with(
+        path: impl AsRef<Path>,
+        cache_bytes: usize,
+        options: DecodeOptions,
+    ) -> Result<Self> {
+        Self::open_inner(path.as_ref(), cache_bytes, true, options)
+    }
+
+    fn open_inner(
+        path: &Path,
+        cache_bytes: usize,
+        force_index: bool,
+        options: DecodeOptions,
+    ) -> Result<Self> {
+        let decoder = VideoDecoder::open_with(path, options)?;
         let fps = decoder.fps();
         let stream = decoder.info().index;
         let index = if force_index || FrameIndex::looks_variable(path, stream) {
@@ -158,6 +189,9 @@ impl FrameReader {
             index,
             next_index: Some(0),
             last_index: None,
+            last_request: None,
+            cache_bytes,
+            frame_bytes: 0,
         })
     }
 
@@ -209,6 +243,15 @@ impl FrameReader {
         self.frame(index)
     }
 
+    /// How many frames to read ahead of a backward step: at most a third of the
+    /// cache, so they are not evicted before they are used.
+    fn scrub_prefetch(&self) -> u64 {
+        if self.frame_bytes == 0 {
+            return 0;
+        }
+        ((self.cache_bytes / 3 / self.frame_bytes) as u64).min(SCRUB_PREFETCH_MAX)
+    }
+
     /// Frame number `index` (0-based). Past the end it returns the last frame.
     pub fn frame(&mut self, index: u64) -> Result<Arc<VideoFrame>> {
         let index = self.last_index.map_or(index, |last| index.min(last));
@@ -216,16 +259,26 @@ impl FrameReader {
             .index
             .as_ref()
             .map_or(index, |ix| index.min(ix.len() - 1));
+        let previous_request = self.last_request.replace(index);
         if let Some(f) = self.cache.get(index) {
             return Ok(f);
         }
 
         let forward_ok = matches!(self.next_index, Some(next) if index >= next && index - next <= MAX_FORWARD_DECODE);
         if !forward_ok {
+            // Scrubbing backwards: start a little earlier and keep the frames on the
+            // way, so the next steps back are cache hits instead of new seeks.
+            let scrubbing_back =
+                matches!(previous_request, Some(p) if index < p && p - index <= SCRUB_WINDOW);
+            let aim = if scrubbing_back {
+                index.saturating_sub(self.scrub_prefetch())
+            } else {
+                index
+            };
             // Aim a quarter frame past the frame start so rounding never lands on the previous frame.
             let target = match &self.index {
-                Some(ix) => ix.time_of(index) + 0.25 * ix.duration_of(index),
-                None => (index as f64 + 0.25) / self.fps,
+                Some(ix) => ix.time_of(aim) + 0.25 * ix.duration_of(aim),
+                None => (aim as f64 + 0.25) / self.fps,
             };
             self.decoder.seek(target)?;
             self.next_index = None;
@@ -257,6 +310,7 @@ impl FrameReader {
                     None => (frame.pts_secs.max(0.0) * self.fps + 0.5).floor() as u64,
                 },
             };
+            self.frame_bytes = frame.byte_len();
             let frame = Arc::new(frame);
             self.cache.insert(idx, Arc::clone(&frame));
             self.next_index = Some(idx + 1);

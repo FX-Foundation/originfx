@@ -10,12 +10,11 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
 
 ## Next, in order
 
-1. **GPU decode and encode (needs a real GPU).** NVIDIA first (NVDEC/NVENC via
-   FFmpeg `cuda`), then Intel (VA-API / QSV). The groundwork exists:
-   `originfx hw` reports what a machine exposes and `originfx bench` measures
-   decode speed, so GPU paths can be compared against the software baseline.
-   AMD and Apple can be written but nobody here can test them; mark them
-   untested and let contributors with that hardware verify.
+1. **More GPU encoders.** GPU decode (CUDA/NVDEC, VA-API) and NVENC encoding
+   for the H.264/H.265 presets are done and tested on an RTX 3050 Laptop. Next:
+   NVENC AV1 (RTX 40 and newer), VA-API / QSV encoding, and decoding on the GPU
+   during export. AMD and Apple can be written but nobody here can test them;
+   mark them untested and let contributors with that hardware verify.
 2. **Zero-copy hand-off to wgpu.** Only meaningful once the Render Engine can
    receive GPU frames. Today decoded frames are RGBA in system memory.
 3. **Project interchange**, once the Timeline Engine exists: EDL, then
@@ -33,11 +32,16 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
   Export still conforms to constant frame rate.
 * **Audio:** surround is kept up to 8 channels (MP3 mixes down to stereo), one
   track is exported at a time, and mixing several tracks is the Audio Engine's job.
-* **No subtitle or chapter handling** beyond listing subtitle streams in probe.
+* **Subtitles are text only.** SRT, ASS/SSA, WebVTT and mov_text can be read and
+  carried into MKV and MP4/MOV exports (with chapters); styling and positioning are
+  dropped, picture subtitles (PGS, DVD, DVB) are skipped, and WebM and AVI outputs
+  cannot hold them. Burning subtitles into the picture belongs in the Render Engine.
+* **VA-API cannot decode 4K AV1 on the Intel iGPU it was tested on.** `Auto` falls back
+  to software and reports why. Untested on other GPUs.
 * **Long GIFs** (over 20 s) use a palette per frame to keep memory flat, so
   colours can flicker slightly.
 * **Trimming** works on export (start/end). Cutting and joining clips is the Timeline Engine's job.
-* **Hardware encoders are not used**, so exports are CPU-bound. On the 2-core
+* **Hardware encoding is NVENC only** (H.264/H.265, opt-in), so other exports are CPU-bound. On the 2-core
   cloud machine this was built on, 1080p to 720p H.264 at the Standard preset
   ran at roughly 2x real time; decode with RGBA conversion ran at ~270 fps.
 

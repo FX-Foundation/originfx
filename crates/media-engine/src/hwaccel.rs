@@ -1,180 +1,19 @@
-//! Hardware acceleration discovery.
+//! Hardware acceleration: discovery and GPU video decoding.
 //!
-//! **Status:** probing works and is tested. GPU *decoding* is implemented
-//! ([`HwMode`], used through `VideoDecoder::open_with`) with an automatic
-//! fallback to software, but could only be exercised without a GPU in the
-//! cloud; run `originfx hwcheck <file>` on a machine with a GPU to verify it.
-//! GPU *encoding* (NVENC etc.) is not implemented.
+//! [`probe_backends`] reports which FFmpeg hardware device types exist and
+//! whether a device can actually be opened on this machine.
+//!
+//! GPU *decoding* is available through [`HwPolicy`] (see
+//! [`DecodeOptions`](crate::DecodeOptions)): NVIDIA via CUDA/NVDEC and
+//! Intel/AMD via VA-API. Each decoded frame is downloaded to system memory
+//! (NV12, or P010 for 10-bit) and converted to RGBA by the same code as
+//! software decoding, so callers see identical frames. GPU *encoding* is not
+//! wired in yet.
 
-use std::ffi::{c_int, CStr, CString};
+use std::ffi::CStr;
 use std::ptr;
 
 use ffmpeg_next as ffmpeg;
-
-use crate::error::{Error, Result};
-
-/// Whether (and how) to use the GPU for decoding.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum HwMode {
-    /// Software only. The default, and always works.
-    #[default]
-    Off,
-    /// Use the first working GPU backend that supports the clip's codec;
-    /// silently fall back to software when none does.
-    Auto,
-    /// Require this backend (`cuda`, `vaapi`, `videotoolbox`, `d3d11va`, ...).
-    /// Opening fails if it cannot be used.
-    Backend(String),
-}
-
-impl HwMode {
-    /// Parse `off`, `auto` or a backend name (as used by the command line).
-    pub fn parse(text: &str) -> HwMode {
-        match text.trim().to_ascii_lowercase().as_str() {
-            "" | "off" | "none" | "software" | "cpu" => HwMode::Off,
-            "auto" | "on" | "gpu" => HwMode::Auto,
-            other => HwMode::Backend(other.to_string()),
-        }
-    }
-}
-
-/// Backends tried by [`HwMode::Auto`], best first. Intel QSV and Vulkan are
-/// left out on purpose: they need extra setup and are not reliable through
-/// the generic device API.
-const AUTO_ORDER: [&str; 5] = ["cuda", "vaapi", "videotoolbox", "d3d11va", "dxva2"];
-
-/// A GPU decode session attached to one decoder.
-pub(crate) struct HwSession {
-    pub name: String,
-    /// Pixel format the decoder must pick; the `get_format` callback reads it
-    /// through `AVCodecContext::opaque`, so the box must outlive the decoder.
-    _wanted: Box<ffmpeg::ffi::AVPixelFormat>,
-}
-
-unsafe extern "C" fn pick_hw_format(
-    ctx: *mut ffmpeg::ffi::AVCodecContext,
-    formats: *const ffmpeg::ffi::AVPixelFormat,
-) -> ffmpeg::ffi::AVPixelFormat {
-    // SAFETY: `opaque` points at the boxed pixel format owned by `HwSession`, which
-    // outlives the codec context; `formats` is a NONE-terminated array from FFmpeg.
-    let wanted = *((*ctx).opaque as *const ffmpeg::ffi::AVPixelFormat);
-    let mut p = formats;
-    while *p != ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NONE {
-        if *p == wanted {
-            return wanted;
-        }
-        p = p.add(1);
-    }
-    ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NONE
-}
-
-/// Try to attach a GPU device to `ctx` (not yet opened) for `codec`.
-///
-/// Returns `Ok(None)` when `mode` is `Auto` and nothing suitable exists,
-/// and an error when a specific backend was demanded but cannot be used.
-pub(crate) fn attach(
-    ctx: *mut ffmpeg::ffi::AVCodecContext,
-    codec: *const ffmpeg::ffi::AVCodec,
-    mode: &HwMode,
-) -> Result<Option<HwSession>> {
-    let names: Vec<String> = match mode {
-        HwMode::Off => return Ok(None),
-        HwMode::Auto => AUTO_ORDER.iter().map(|s| (*s).to_string()).collect(),
-        HwMode::Backend(n) => vec![n.clone()],
-    };
-    let demanded = matches!(mode, HwMode::Backend(_));
-    let mut last_problem = String::new();
-
-    for name in names {
-        let cname = CString::new(name.clone())
-            .map_err(|_| Error::InvalidArgument(format!("bad backend name {name:?}")))?;
-        // SAFETY: plain table lookups and buffer-reference calls; every pointer we
-        // create is either handed to the codec context (which owns it) or released here.
-        unsafe {
-            let kind = ffmpeg::ffi::av_hwdevice_find_type_by_name(cname.as_ptr());
-            if kind == ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_NONE {
-                if demanded {
-                    return Err(Error::InvalidArgument(format!(
-                        "unknown hardware backend '{name}'"
-                    )));
-                }
-                continue;
-            }
-            // Which pixel format does this codec use with that device type?
-            let mut wanted = None;
-            let mut i = 0;
-            loop {
-                let cfg = ffmpeg::ffi::avcodec_get_hw_config(codec, i);
-                if cfg.is_null() {
-                    break;
-                }
-                if (*cfg).methods & ffmpeg::ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as c_int
-                    != 0
-                    && (*cfg).device_type == kind
-                {
-                    wanted = Some((*cfg).pix_fmt);
-                    break;
-                }
-                i += 1;
-            }
-            let Some(wanted) = wanted else {
-                last_problem = format!("this codec has no {name} decoder");
-                continue;
-            };
-            let mut dev: *mut ffmpeg::ffi::AVBufferRef = ptr::null_mut();
-            let ret = ffmpeg::ffi::av_hwdevice_ctx_create(
-                &mut dev,
-                kind,
-                ptr::null(),
-                ptr::null_mut(),
-                0,
-            );
-            if ret < 0 {
-                last_problem = format!("{name}: {}", error_text(ret));
-                continue;
-            }
-            let wanted = Box::new(wanted);
-            (*ctx).hw_device_ctx = ffmpeg::ffi::av_buffer_ref(dev);
-            ffmpeg::ffi::av_buffer_unref(&mut dev);
-            (*ctx).opaque = &*wanted as *const _ as *mut std::ffi::c_void;
-            (*ctx).get_format = Some(pick_hw_format);
-            return Ok(Some(HwSession {
-                name,
-                _wanted: wanted,
-            }));
-        }
-    }
-    if demanded {
-        Err(Error::Unsupported(format!(
-            "hardware decoding unavailable: {last_problem}"
-        )))
-    } else {
-        Ok(None)
-    }
-}
-
-/// Does this decoded frame live in GPU memory?
-pub(crate) fn is_hw_frame(frame: &ffmpeg::frame::Video) -> bool {
-    // SAFETY: reading a pointer field of a valid AVFrame.
-    unsafe { !(*frame.as_ptr()).hw_frames_ctx.is_null() }
-}
-
-/// Copy a GPU frame into system memory (NV12, P010, ...), keeping its timestamps.
-pub(crate) fn download(hw: &ffmpeg::frame::Video) -> Result<ffmpeg::frame::Video> {
-    let mut sw = ffmpeg::frame::Video::empty();
-    // SAFETY: both frames are valid; `sw` is empty so FFmpeg allocates its buffers.
-    unsafe {
-        let ret = ffmpeg::ffi::av_hwframe_transfer_data(sw.as_mut_ptr(), hw.as_ptr(), 0);
-        if ret < 0 {
-            return Err(ffmpeg::Error::from(ret).into());
-        }
-        let ret = ffmpeg::ffi::av_frame_copy_props(sw.as_mut_ptr(), hw.as_ptr());
-        if ret < 0 {
-            return Err(ffmpeg::Error::from(ret).into());
-        }
-    }
-    Ok(sw)
-}
 
 /// A hardware acceleration API FFmpeg knows about.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,4 +126,332 @@ pub fn hardware_codecs() -> Vec<String> {
         }
     }
     found
+}
+
+// ---------------------------------------------------------------------------
+// GPU decoding
+// ---------------------------------------------------------------------------
+
+/// A GPU decoding API the engine can use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HwApi {
+    /// NVIDIA NVDEC through CUDA.
+    Cuda,
+    /// VA-API (Intel and AMD on Linux).
+    Vaapi,
+}
+
+impl HwApi {
+    /// Every API, in the order [`HwPolicy::Auto`] tries them.
+    pub const ALL: [HwApi; 2] = [HwApi::Cuda, HwApi::Vaapi];
+
+    /// Short name, as FFmpeg and the CLI spell it: `cuda`, `vaapi`.
+    pub fn name(self) -> &'static str {
+        match self {
+            HwApi::Cuda => "cuda",
+            HwApi::Vaapi => "vaapi",
+        }
+    }
+
+    /// True when a device for this API can be opened on this machine right now.
+    pub fn is_usable(self) -> bool {
+        crate::init();
+        let mut ctx: *mut ffmpeg::ffi::AVBufferRef = ptr::null_mut();
+        // SAFETY: on success `ctx` holds a new reference, released straight away.
+        unsafe {
+            let ret = ffmpeg::ffi::av_hwdevice_ctx_create(
+                &mut ctx,
+                self.device_type(),
+                ptr::null(),
+                ptr::null_mut(),
+                0,
+            );
+            if ret >= 0 {
+                ffmpeg::ffi::av_buffer_unref(&mut ctx);
+            }
+            ret >= 0
+        }
+    }
+
+    /// Parse a name as returned by [`name`](Self::name).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.name() == name)
+    }
+
+    fn device_type(self) -> ffmpeg::ffi::AVHWDeviceType {
+        match self {
+            HwApi::Cuda => ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
+            HwApi::Vaapi => ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
+        }
+    }
+}
+
+impl std::fmt::Display for HwApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// Whether, and how, to decode video on the GPU.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum HwPolicy {
+    /// Software decoding only (the default; identical to earlier releases).
+    #[default]
+    Off,
+    /// Try CUDA, then VA-API. If no device opens, the codec is not supported,
+    /// or a frame fails to come back from the GPU, quietly continue in software.
+    Auto,
+    /// Use exactly this API. Opening fails if it cannot decode the stream, and
+    /// a GPU failure while decoding is returned as an error instead of falling back.
+    Require(HwApi),
+}
+
+/// A GPU decode setup ready to attach to a codec context.
+pub(crate) struct HwSetup {
+    /// Decoder implementation that supports this device (e.g. native `av1`, not `libdav1d`).
+    pub codec: ffmpeg::Codec,
+    /// Pixel format the decoder outputs when it decodes on the GPU.
+    pub hw_format: ffmpeg::ffi::AVPixelFormat,
+    /// Owned reference to the device; handed to the codec context by [`attach`](Self::attach).
+    device: *mut ffmpeg::ffi::AVBufferRef,
+}
+
+impl HwSetup {
+    /// Find a decoder for `codec_id` that can use `api`, then open the device.
+    /// The codec check comes first so no device is created for a codec it cannot decode.
+    pub fn new(api: HwApi, codec_id: ffmpeg::codec::Id) -> std::result::Result<Self, String> {
+        let (codec, hw_format) = find_hw_decoder(codec_id, api.device_type())
+            .ok_or_else(|| format!("{api} cannot decode {}", codec_id.name()))?;
+        let mut device: *mut ffmpeg::ffi::AVBufferRef = ptr::null_mut();
+        // SAFETY: on success `av_hwdevice_ctx_create` stores a new reference in
+        // `device`, which `HwSetup` owns until `attach` or `Drop`.
+        let ret = unsafe {
+            ffmpeg::ffi::av_hwdevice_ctx_create(
+                &mut device,
+                api.device_type(),
+                ptr::null(),
+                ptr::null_mut(),
+                0,
+            )
+        };
+        if ret < 0 {
+            return Err(format!("{api} device: {}", error_text(ret)));
+        }
+        Ok(Self {
+            codec,
+            hw_format,
+            device,
+        })
+    }
+
+    /// Give the device to a codec context that has not been opened yet and
+    /// install the callback that picks the GPU output format.
+    pub fn attach(mut self, ctx: &mut ffmpeg::codec::context::Context) {
+        // SAFETY: `ctx` is a valid, not yet opened codec context. Ownership of our
+        // device reference moves into `hw_device_ctx`; `avcodec_free_context`
+        // releases it. We null our pointer so `Drop` does not release it twice.
+        unsafe {
+            let raw = ctx.as_mut_ptr();
+            (*raw).hw_device_ctx = self.device;
+            (*raw).get_format = Some(pick_hw_format);
+        }
+        self.device = ptr::null_mut();
+    }
+}
+
+impl Drop for HwSetup {
+    fn drop(&mut self) {
+        if !self.device.is_null() {
+            // SAFETY: we still own this reference (it was never attached).
+            unsafe { ffmpeg::ffi::av_buffer_unref(&mut self.device) };
+        }
+    }
+}
+
+/// Hardware pixel format of a `HW_DEVICE_CTX` config for `device` on `codec`, if any.
+///
+/// # Safety
+/// `codec` must point to a valid, registered `AVCodec`.
+unsafe fn hw_config_format(
+    codec: *const ffmpeg::ffi::AVCodec,
+    device: ffmpeg::ffi::AVHWDeviceType,
+) -> Option<ffmpeg::ffi::AVPixelFormat> {
+    let method = ffmpeg::ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32;
+    for i in 0.. {
+        // SAFETY: the caller guarantees `codec` is valid; FFmpeg returns null past the last config.
+        let config = unsafe { ffmpeg::ffi::avcodec_get_hw_config(codec, i) };
+        if config.is_null() {
+            return None;
+        }
+        // SAFETY: non-null configs point into the codec's static table.
+        let config = unsafe { &*config };
+        if config.device_type == device && config.methods & method != 0 {
+            return Some(config.pix_fmt);
+        }
+    }
+    None
+}
+
+/// First registered decoder for `id` that has a GPU config for `device`.
+fn find_hw_decoder(
+    id: ffmpeg::codec::Id,
+    device: ffmpeg::ffi::AVHWDeviceType,
+) -> Option<(ffmpeg::Codec, ffmpeg::ffi::AVPixelFormat)> {
+    let want: ffmpeg::ffi::AVCodecID = id.into();
+    let mut opaque: *mut std::ffi::c_void = ptr::null_mut();
+    loop {
+        // SAFETY: `av_codec_iterate` walks FFmpeg's static codec list; the
+        // returned codecs live for the whole program.
+        unsafe {
+            let codec = ffmpeg::ffi::av_codec_iterate(&mut opaque);
+            if codec.is_null() {
+                return None;
+            }
+            if (*codec).id != want || ffmpeg::ffi::av_codec_is_decoder(codec) == 0 {
+                continue;
+            }
+            if let Some(fmt) = hw_config_format(codec, device) {
+                return Some((ffmpeg::Codec::wrap(codec as *mut _), fmt));
+            }
+        }
+    }
+}
+
+/// `get_format` callback: choose the GPU format when the decoder offers it,
+/// otherwise FFmpeg's default (software) choice. A software pick is noticed by
+/// the decoder, which then reopens itself as a plain software decoder.
+unsafe extern "C" fn pick_hw_format(
+    ctx: *mut ffmpeg::ffi::AVCodecContext,
+    formats: *const ffmpeg::ffi::AVPixelFormat,
+) -> ffmpeg::ffi::AVPixelFormat {
+    // SAFETY: FFmpeg calls this with a valid context whose `hw_device_ctx` we set
+    // (a buffer holding an `AVHWDeviceContext`) and a list ending in AV_PIX_FMT_NONE.
+    unsafe {
+        let device = (*ctx).hw_device_ctx;
+        if !device.is_null() {
+            let kind = (*((*device).data as *const ffmpeg::ffi::AVHWDeviceContext)).type_;
+            if let Some(want) = hw_config_format((*ctx).codec, kind) {
+                let mut p = formats;
+                while *p != ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NONE {
+                    if *p == want {
+                        return want;
+                    }
+                    p = p.add(1);
+                }
+            }
+        }
+        ffmpeg::ffi::avcodec_default_get_format(ctx, formats)
+    }
+}
+
+/// Copy a GPU frame into system memory, keeping its timestamps and colour tags.
+///
+/// GPUs hand back NV12 (or P010 for 10-bit), where the two chroma planes are
+/// interleaved. The decoded values are identical to software decoding, but
+/// swscale converts 8-bit NV12 to RGB along a different path than the planar
+/// `yuv420p` a software decoder produces, so sharp colour edges come out
+/// differently. Repacking NV12 to planar (a lossless copy) makes GPU and
+/// software frames pixel-identical. P010 already converts identically to
+/// `yuv420p10le`, so it is not repacked.
+///
+/// `bufs` keeps the system-memory frames between calls, so a 4K stream does
+/// not allocate (and page in) fresh buffers for every frame. A buffer is only
+/// reused once nothing holds the frame handed out from it any more.
+pub(crate) fn download(
+    hw: &ffmpeg::frame::Video,
+    bufs: &mut DownloadBuffers,
+) -> std::result::Result<ffmpeg::frame::Video, String> {
+    let size = (hw.width(), hw.height());
+    if !reusable(&bufs.staging, None, size) {
+        bufs.staging = ffmpeg::frame::Video::empty();
+    }
+    // SAFETY: both frames are valid and nobody else references `staging`'s
+    // buffers. When it is empty FFmpeg allocates it in the device's download
+    // format; otherwise it is overwritten in place (same size and format).
+    let ret =
+        unsafe { ffmpeg::ffi::av_hwframe_transfer_data(bufs.staging.as_mut_ptr(), hw.as_ptr(), 0) };
+    if ret < 0 {
+        bufs.staging = ffmpeg::frame::Video::empty();
+        return Err(format!("GPU frame download failed: {}", error_text(ret)));
+    }
+    let source = if bufs.staging.format() == ffmpeg::format::Pixel::NV12 {
+        let planar = ffmpeg::format::Pixel::YUV420P;
+        if !reusable(&bufs.planar, Some(planar), size) {
+            bufs.planar = ffmpeg::frame::Video::new(planar, size.0, size.1);
+        }
+        planar_from_nv12(&bufs.staging, &mut bufs.planar);
+        &bufs.planar
+    } else {
+        // 10-bit P010 converts to RGBA exactly like planar yuv420p10le: hand it on as is.
+        &bufs.staging
+    };
+    // SAFETY: `source` is a valid frame. `av_frame_clone` makes a new frame that
+    // shares its buffers (no pixel copy); null means out of memory.
+    let shared = unsafe { ffmpeg::ffi::av_frame_clone(source.as_ptr()) };
+    if shared.is_null() {
+        return Err("GPU frame download failed: out of memory".to_string());
+    }
+    // SAFETY: `shared` is a new, owned frame.
+    let mut out = unsafe { ffmpeg::frame::Video::wrap(shared) };
+    // SAFETY: both frames are valid; copies pts, colour and other metadata, not pixels.
+    let ret = unsafe { ffmpeg::ffi::av_frame_copy_props(out.as_mut_ptr(), hw.as_ptr()) };
+    if ret < 0 {
+        return Err(format!("GPU frame download failed: {}", error_text(ret)));
+    }
+    Ok(out)
+}
+
+/// System-memory frames reused by [`download`].
+pub(crate) struct DownloadBuffers {
+    staging: ffmpeg::frame::Video,
+    planar: ffmpeg::frame::Video,
+}
+
+impl Default for DownloadBuffers {
+    fn default() -> Self {
+        Self {
+            staging: ffmpeg::frame::Video::empty(),
+            planar: ffmpeg::frame::Video::empty(),
+        }
+    }
+}
+
+/// Can `f` be written again for a frame of `size` (and `format`, if given)?
+/// False when it is empty or a frame handed out earlier still shares its buffers.
+fn reusable(
+    f: &ffmpeg::frame::Video,
+    format: Option<ffmpeg::format::Pixel>,
+    size: (u32, u32),
+) -> bool {
+    // SAFETY: `f` is a valid frame; `av_frame_is_writable` only inspects its
+    // buffer reference counts (it takes `*mut` but does not modify the frame).
+    let writable = unsafe { ffmpeg::ffi::av_frame_is_writable(f.as_ptr() as *mut _) != 0 };
+    writable && (f.width(), f.height()) == size && format.is_none_or(|p| f.format() == p)
+}
+
+/// Rows of plane `p` of `f`, each trimmed to `len` bytes.
+fn rows(f: &ffmpeg::frame::Video, p: usize, len: usize) -> impl Iterator<Item = &[u8]> {
+    let stride = f.stride(p);
+    f.data(p).chunks(stride).map(move |r| &r[..len])
+}
+
+/// Like [`rows`], writable.
+fn rows_mut(f: &mut ffmpeg::frame::Video, p: usize, len: usize) -> impl Iterator<Item = &mut [u8]> {
+    let stride = f.stride(p);
+    f.data_mut(p).chunks_mut(stride).map(move |r| &mut r[..len])
+}
+
+/// NV12 -> yuv420p (into `dst`, same size): copy luma, split the interleaved UV plane.
+fn planar_from_nv12(src: &ffmpeg::frame::Video, dst: &mut ffmpeg::frame::Video) {
+    let (w, cw) = (src.width() as usize, (src.width() as usize).div_ceil(2));
+    for (d, s) in rows_mut(dst, 0, w).zip(rows(src, 0, w)) {
+        d.copy_from_slice(s);
+    }
+    for (plane, k) in [(1, 0), (2, 1)] {
+        for (d, s) in rows_mut(dst, plane, cw).zip(rows(src, 1, cw * 2)) {
+            for (d, uv) in d.iter_mut().zip(s.as_chunks::<2>().0) {
+                *d = uv[k];
+            }
+        }
+    }
 }

@@ -15,6 +15,7 @@ use ffmpeg_next as ffmpeg;
 
 use crate::decode::start_offset_secs;
 use crate::error::{Error, Result};
+use crate::hwaccel::{HwApi, HwPolicy};
 use crate::preset::{find_encoder, AudioSpec, ExportPreset, Quality, VideoSpec};
 use crate::probe::stream_rotation;
 
@@ -47,6 +48,21 @@ pub struct ExportSettings {
     pub video_stream: Option<usize>,
     /// Container stream index of the audio track to use; `None` picks the default track.
     pub audio_stream: Option<usize>,
+    /// GPU video encoding (NVIDIA NVENC) for the H.264 and H.265 presets.
+    /// Defaults to [`HwPolicy::Off`] (software). With [`HwPolicy::Auto`] the export
+    /// quietly runs in software when NVENC cannot be used, including when it fails
+    /// part-way (the export then restarts in software, so progress starts again).
+    pub hw_encode: HwPolicy,
+    /// Copy the source's text subtitle tracks into the output. Supported for MKV
+    /// (as SRT) and MP4/MOV (as mov_text); other formats skip them and say so in
+    /// [`ExportReport::notes`]. Text only: styling and positioning are dropped, and
+    /// picture subtitles (PGS, DVD) are skipped. Off by default.
+    pub subtitles: bool,
+    /// Copy chapter markers into the output (MKV, MP4, MOV, M4A). Off by default.
+    pub chapters: bool,
+    /// Testing aid: make the GPU encoder fail after this many frames.
+    #[doc(hidden)]
+    pub simulate_gpu_failure_after: Option<u64>,
 }
 
 impl ExportSettings {
@@ -65,6 +81,10 @@ impl ExportSettings {
             bit_depth: None,
             video_stream: None,
             audio_stream: None,
+            hw_encode: HwPolicy::Off,
+            subtitles: false,
+            chapters: false,
+            simulate_gpu_failure_after: None,
         }
     }
 
@@ -109,6 +129,24 @@ impl ExportSettings {
     /// Force 8-bit or 10-bit video output (see [`ExportSettings::bit_depth`]).
     pub fn bit_depth(mut self, bits: u8) -> Self {
         self.bit_depth = Some(bits);
+        self
+    }
+
+    /// Encode video on the GPU (see [`ExportSettings::hw_encode`]).
+    pub fn hw_encode(mut self, policy: HwPolicy) -> Self {
+        self.hw_encode = policy;
+        self
+    }
+
+    /// Carry text subtitle tracks into the output (see [`ExportSettings::subtitles`]).
+    pub fn subtitles(mut self, on: bool) -> Self {
+        self.subtitles = on;
+        self
+    }
+
+    /// Carry chapter markers into the output (see [`ExportSettings::chapters`]).
+    pub fn chapters(mut self, on: bool) -> Self {
+        self.chapters = on;
         self
     }
 
@@ -186,6 +224,15 @@ pub struct ExportReport {
     pub duration_secs: f64,
     pub output_bytes: u64,
     pub elapsed: Duration,
+    /// Why GPU encoding was requested but the video was encoded in software.
+    pub hw_fallback_reason: Option<String>,
+    /// Subtitle tracks written to the output.
+    pub subtitle_tracks: usize,
+    /// Chapter markers written to the output.
+    pub chapters: usize,
+    /// Things that were asked for but not done, in plain words (for example a
+    /// subtitle track that could not be carried over).
+    pub notes: Vec<String>,
 }
 
 /// Export without progress reporting.
@@ -212,11 +259,70 @@ pub fn export_with_progress(
     }
     settings.preset.check_available()?;
 
-    let result = run_export(input, output, settings, on_progress);
+    let mut on_progress = on_progress;
+    // With GPU encoding off, nothing GPU-related is touched (not even a device probe).
+    let gpu = if settings.hw_encode == HwPolicy::Off {
+        Ok(None)
+    } else {
+        match (settings.hw_encode, nvenc_encoder(settings)) {
+            (_, Ok(name)) => Ok(Some(name)),
+            (HwPolicy::Require(_), Err(reason)) => return Err(Error::Unsupported(reason)),
+            (_, Err(reason)) => Err(reason),
+        }
+    };
+    let result = match gpu {
+        Ok(None) => run_export(input, output, settings, None, &mut on_progress),
+        Err(reason) => {
+            run_export(input, output, settings, None, &mut on_progress).map(|r| ExportReport {
+                hw_fallback_reason: Some(reason),
+                ..r
+            })
+        }
+        Ok(Some(name)) => match run_export(input, output, settings, Some(name), &mut on_progress) {
+            Err(e) if settings.hw_encode == HwPolicy::Auto && !matches!(e, Error::Cancelled) => {
+                // Anything going wrong with NVENC is retried in software from the
+                // start; a problem that is not the GPU's fails again there.
+                let _ = std::fs::remove_file(output);
+                run_export(input, output, settings, None, &mut on_progress).map(|r| ExportReport {
+                    hw_fallback_reason: Some(format!("{name} failed: {e}")),
+                    ..r
+                })
+            }
+            other => other,
+        },
+    };
     if result.is_err() {
         let _ = std::fs::remove_file(output);
     }
     result
+}
+
+/// The NVENC encoder for this export, or why it cannot be used.
+fn nvenc_encoder(settings: &ExportSettings) -> std::result::Result<&'static str, String> {
+    use ExportPreset::*;
+    if let HwPolicy::Require(HwApi::Vaapi) = settings.hw_encode {
+        return Err("GPU encoding supports NVIDIA (cuda) only so far, not vaapi".into());
+    }
+    let name = match settings.preset {
+        Mp4H264 | MovH264 | MkvH264 => "h264_nvenc",
+        Mp4H265 | MkvH265 => "hevc_nvenc",
+        other => {
+            return Err(format!(
+                "GPU encoding covers the H.264 and H.265 presets, not {}",
+                other.label()
+            ))
+        }
+    };
+    if name == "h264_nvenc" && settings.bit_depth == Some(10) {
+        return Err("NVENC cannot write 10-bit H.264".into());
+    }
+    if ffmpeg::encoder::find_by_name(name).is_none() {
+        return Err(format!("this FFmpeg build has no {name}"));
+    }
+    if !HwApi::Cuda.is_usable() {
+        return Err("no usable CUDA device".into());
+    }
+    Ok(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +473,7 @@ fn pixel_from_name(name: &str) -> Result<Pixel> {
     Ok(match name {
         "yuv420p" => Pixel::YUV420P,
         "yuv420p10le" => Pixel::YUV420P10LE,
+        "p010le" => Pixel::P010LE,
         "yuvj420p" => Pixel::YUVJ420P,
         "yuv422p" => Pixel::YUV422P,
         "yuv422p10le" => Pixel::YUV422P10LE,
@@ -403,6 +510,34 @@ fn video_options(settings: &ExportSettings, encoder: &str) -> Vec<(&'static str,
             }
             o.push(("x265-params", "log-level=error".into()));
             o.push(("tag", "hvc1".into()));
+        }
+        "h264_nvenc" | "hevc_nvenc" => {
+            let hevc = encoder == "hevc_nvenc";
+            o.push(("preset", pick("p2", "p5", "p7")));
+            o.push(("tune", "hq".into()));
+            o.push(("rc", "vbr".into()));
+            if !by_bitrate {
+                // Constant quality with no bitrate cap, like CRF in x264/x265.
+                // Tuned against x264/x265 at the same quality level: similar
+                // quality, somewhat larger files (NVENC compresses less well).
+                let cq = if hevc {
+                    pick("32", "27", "22")
+                } else {
+                    pick("31", "26", "21")
+                };
+                o.push(("cq", cq));
+                o.push(("b", "0".into()));
+                // Without a maximum, NVENC caps itself near 21 Mbit/s, which
+                // limits 4K quality whatever `cq` asks for.
+                o.push(("maxrate", "400M".into()));
+                o.push(("bufsize", "800M".into()));
+            }
+            if hevc {
+                o.push(("tag", "hvc1".into()));
+            } else if settings.bit_depth != Some(10) {
+                // NVENC picks Main by default; High compresses better and plays everywhere.
+                o.push(("profile", "high".into()));
+            }
         }
         "libvpx-vp9" => {
             o.push(("deadline", "good".into()));
@@ -492,15 +627,19 @@ struct VideoPipe {
     frames: u64,
     last_pts_secs: f64,
     encoder_name: &'static str,
+    /// Testing aid, see [`ExportSettings::simulate_gpu_failure_after`].
+    fail_after: Option<u64>,
 }
 
 impl VideoPipe {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         ictx: &format::context::Input,
         octx: &mut format::context::Output,
         in_index: usize,
         settings: &ExportSettings,
         spec: VideoSpec,
+        gpu_encoder: Option<&'static str>,
         origin_secs: f64,
         global_header: bool,
     ) -> Result<Self> {
@@ -548,8 +687,20 @@ impl VideoPipe {
             rational_from_fps(fps_f)
         };
 
-        let (codec_found, name) = find_encoder(spec.encoders)?;
+        let (codec_found, name) = match gpu_encoder {
+            Some(n) => (
+                ffmpeg::encoder::find_by_name(n)
+                    .ok_or_else(|| Error::Unsupported(format!("encoder {n}")))?,
+                n,
+            ),
+            None => find_encoder(spec.encoders)?,
+        };
         let pix_name = output_pix_fmt(settings, &spec, decoder.format())?;
+        // NVENC takes 10-bit as P010 (same values, interleaved chroma), not planar.
+        let pix_name = match (gpu_encoder, pix_name) {
+            (Some(_), "yuv420p10le") => "p010le",
+            _ => pix_name,
+        };
         let pix = pixel_from_name(pix_name)?;
 
         let mut ost = octx.add_stream(codec_found)?;
@@ -700,6 +851,7 @@ impl VideoPipe {
             frames: 0,
             last_pts_secs: 0.0,
             encoder_name: name,
+            fail_after: gpu_encoder.and(settings.simulate_gpu_failure_after),
         })
     }
 
@@ -730,6 +882,9 @@ impl VideoPipe {
             .is_ok()
         {
             out.set_kind(picture::Type::None);
+            if self.fail_after == Some(self.frames) {
+                return Err(Error::Unsupported("simulated GPU failure".into()));
+            }
             self.encoder.send_frame(&out)?;
             self.frames += 1;
             self.encode_drain(octx)?;
@@ -1034,10 +1189,224 @@ fn patch_flac_length(path: &Path, total_samples: u64) -> std::io::Result<()> {
 
 // --- driver -----------------------------------------------------------------
 
+/// `gpu_encoder`: encode video with this NVENC encoder instead of the preset's own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubKind {
+    /// MP4/MOV text track (`tx3g`).
+    MovText,
+    /// Matroska `S_TEXT/UTF8`.
+    Srt,
+}
+
+/// The slice of the source that ends up in the output.
+#[derive(Clone, Copy)]
+struct Window {
+    /// Time zero of the source (see `run_export`).
+    origin_secs: f64,
+    trim_start: f64,
+    trim_end: Option<f64>,
+}
+
+/// A subtitle track being written next to the audio and video.
+struct SubTrack {
+    out_index: usize,
+    out_tb: Rational,
+    kind: SubKind,
+    cues: Vec<crate::types::SubtitleCue>,
+}
+
+/// Read the source's text subtitle tracks and add an output stream for each.
+/// Anything that cannot be carried over is explained in `notes`.
+fn prepare_subtitles(
+    input: &Path,
+    ictx: &format::context::Input,
+    octx: &mut format::context::Output,
+    muxer: &str,
+    window: Window,
+    notes: &mut Vec<String>,
+) -> Result<Vec<SubTrack>> {
+    let wanted: Vec<(usize, ffmpeg::codec::Id, Option<String>, Option<String>)> = ictx
+        .streams()
+        .filter(|s| s.parameters().medium() == Type::Subtitle)
+        .map(|s| {
+            let md = s.metadata();
+            (
+                s.index(),
+                s.parameters().id(),
+                md.get("language").map(str::to_owned),
+                md.get("title").map(str::to_owned),
+            )
+        })
+        .collect();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (kind, codec_id) = match muxer {
+        "mp4" | "mov" => (SubKind::MovText, ffmpeg::codec::Id::MOV_TEXT),
+        "matroska" => (SubKind::Srt, ffmpeg::codec::Id::SUBRIP),
+        other => {
+            notes.push(format!(
+                "{other} output cannot hold these subtitles; they were left out"
+            ));
+            return Ok(Vec::new());
+        }
+    };
+    let Some(codec) = ffmpeg::encoder::find(codec_id) else {
+        notes.push("this FFmpeg build cannot write text subtitles; they were left out".into());
+        return Ok(Vec::new());
+    };
+
+    // A second reader, so the main one keeps its position.
+    let mut sub_in = format::input(&input)?;
+    let mut tracks = Vec::new();
+    for (index, id, language, title) in wanted {
+        if !crate::subtitle::is_text_codec(id) {
+            notes.push(format!(
+                "subtitle stream {index} ({}) is a picture format and was skipped",
+                id.name()
+            ));
+            continue;
+        }
+        let cues = match crate::subtitle::read_cues(&mut sub_in, index) {
+            Ok(c) => crate::subtitle::rebase_cues(
+                c,
+                window.origin_secs,
+                window.trim_start,
+                window.trim_end,
+            ),
+            Err(e) => {
+                notes.push(format!("subtitle stream {index} could not be read: {e}"));
+                continue;
+            }
+        };
+        if cues.is_empty() {
+            notes.push(format!(
+                "subtitle stream {index} has no lines in the exported range"
+            ));
+            continue;
+        }
+        let mut ost = octx.add_stream(codec)?;
+        // SAFETY: `ost` is a freshly created stream owned by `octx`, so its codec
+        // parameters pointer is valid. Writing the plain `codec_type` and `codec_id`
+        // fields tells the muxer what this stream carries; ffmpeg-next has no setter
+        // for subtitle streams.
+        unsafe {
+            let par = (*ost.as_mut_ptr()).codecpar;
+            (*par).codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE;
+            (*par).codec_id = codec_id.into();
+        }
+        ost.set_time_base(Rational::new(1, 1000));
+        let mut md = Dictionary::new();
+        if let Some(l) = language {
+            md.set("language", &l);
+        }
+        if let Some(t) = title {
+            md.set("title", &t);
+        }
+        ost.set_metadata(md);
+        tracks.push(SubTrack {
+            out_index: ost.index(),
+            out_tb: Rational::new(1, 1000),
+            kind,
+            cues,
+        });
+    }
+    Ok(tracks)
+}
+
+/// Write every cue of `track`. MP4/MOV text tracks need explicit empty samples
+/// in the gaps, otherwise a line would stay up until the next one.
+fn write_subtitle_track(octx: &mut format::context::Output, track: &SubTrack) -> Result<()> {
+    let tb = f64::from(track.out_tb.numerator()) / f64::from(track.out_tb.denominator().max(1));
+    let ts = |secs: f64| (secs / tb).round() as i64;
+    let send = |octx: &mut format::context::Output, data: &[u8], start: i64, dur: i64| {
+        let mut p = Packet::copy(data);
+        p.set_pts(Some(start));
+        p.set_dts(Some(start));
+        p.set_duration(dur.max(1));
+        p.set_stream(track.out_index);
+        p.write_interleaved(octx)
+    };
+    let mut cursor = 0.0_f64;
+    for cue in &track.cues {
+        let mut start = cue.start_secs;
+        if track.kind == SubKind::MovText {
+            // Samples cannot overlap: a new line replaces the previous one.
+            start = start.max(cursor);
+            if cue.end_secs <= start {
+                continue;
+            }
+            if start > cursor + 0.001 {
+                send(octx, &[0, 0], ts(cursor), ts(start) - ts(cursor))?;
+            }
+        }
+        let bytes = cue.text.as_bytes();
+        let data = match track.kind {
+            SubKind::MovText => {
+                let n = bytes.len().min(usize::from(u16::MAX));
+                let mut d = Vec::with_capacity(n + 2);
+                d.extend_from_slice(&(n as u16).to_be_bytes());
+                d.extend_from_slice(&bytes[..n]);
+                d
+            }
+            SubKind::Srt => bytes.to_vec(),
+        };
+        send(octx, &data, ts(start), ts(cue.end_secs) - ts(start))?;
+        cursor = cursor.max(cue.end_secs);
+    }
+    Ok(())
+}
+
+/// Copy chapter markers, shifted and clipped to the exported range.
+/// Returns how many were written (0 when the container cannot hold chapters).
+fn add_chapters(
+    ictx: &format::context::Input,
+    octx: &mut format::context::Output,
+    trim_start: f64,
+    trim_end: Option<f64>,
+) -> Result<usize> {
+    if !matches!(octx.format().name(), "mp4" | "mov" | "matroska" | "ipod") {
+        return Ok(0);
+    }
+    let len = trim_end.map(|e| e - trim_start);
+    let mut written = 0usize;
+    for ch in ictx.chapters() {
+        let tb = ch.time_base();
+        let f = f64::from(tb.numerator()) / f64::from(tb.denominator().max(1));
+        let mut start = ch.start() as f64 * f - trim_start;
+        let mut end = ch.end() as f64 * f - trim_start;
+        if end <= 0.0 || len.is_some_and(|l| start >= l) {
+            continue;
+        }
+        start = start.max(0.0);
+        if let Some(l) = len {
+            end = end.min(l);
+        }
+        if end <= start {
+            continue;
+        }
+        let title = ch
+            .metadata()
+            .get("title")
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("Chapter {}", written + 1));
+        octx.add_chapter(
+            written as i64,
+            Rational::new(1, 1000),
+            (start * 1000.0).round() as i64,
+            (end * 1000.0).round() as i64,
+            title,
+        )?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 fn run_export(
     input: &Path,
     output: &Path,
     settings: &ExportSettings,
+    gpu_encoder: Option<&'static str>,
     mut on_progress: impl FnMut(&Progress) -> bool,
 ) -> Result<ExportReport> {
     let started = Instant::now();
@@ -1113,6 +1482,7 @@ fn run_export(
             i,
             settings,
             spec,
+            gpu_encoder,
             origin_secs,
             global_header,
         )?),
@@ -1129,6 +1499,29 @@ fn run_export(
             global_header,
         )?),
         _ => None,
+    };
+
+    let mut notes = Vec::new();
+    let mut sub_tracks = if settings.subtitles {
+        prepare_subtitles(
+            input,
+            &ictx,
+            &mut octx,
+            preset.muxer(),
+            Window {
+                origin_secs,
+                trim_start,
+                trim_end,
+            },
+            &mut notes,
+        )?
+    } else {
+        Vec::new()
+    };
+    let chapter_count = if settings.chapters {
+        add_chapters(&ictx, &mut octx, trim_start, trim_end)?
+    } else {
+        0
     };
 
     octx.set_metadata(ictx.metadata().to_owned());
@@ -1150,6 +1543,14 @@ fn run_export(
             .stream(a.out_index)
             .map(|s| s.time_base())
             .unwrap_or(a.enc_tb);
+    }
+
+    for t in &mut sub_tracks {
+        t.out_tb = octx
+            .stream(t.out_index)
+            .map(|s| s.time_base())
+            .unwrap_or(Rational::new(1, 1000));
+        write_subtitle_track(&mut octx, t)?;
     }
 
     let mut last_reported = f64::NEG_INFINITY;
@@ -1235,5 +1636,9 @@ fn run_export(
         duration_secs: out_secs,
         output_bytes: std::fs::metadata(output).map(|m| m.len()).unwrap_or(0),
         elapsed: started.elapsed(),
+        hw_fallback_reason: None,
+        subtitle_tracks: sub_tracks.len(),
+        chapters: chapter_count,
+        notes,
     })
 }

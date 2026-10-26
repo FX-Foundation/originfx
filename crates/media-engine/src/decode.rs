@@ -1,4 +1,7 @@
-//! Software video and audio decoding with frame-accurate seeking.
+//! Video and audio decoding with frame-accurate seeking.
+//!
+//! Video decodes in software by default; [`DecodeOptions`] can move it to the
+//! GPU (see [`HwPolicy`]). Either way frames come out as the same RGBA.
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -9,7 +12,7 @@ use ffmpeg::software::scaling::{Context as Scaler, Flags};
 use ffmpeg_next as ffmpeg;
 
 use crate::error::{Error, Result};
-use crate::hwaccel::{self, HwMode};
+use crate::hwaccel::{HwApi, HwPolicy, HwSetup};
 use crate::probe::{stream_duration_secs, stream_rotation};
 use crate::types::{AudioBuffer, Rational, VideoFrame, VideoStreamInfo};
 
@@ -130,24 +133,81 @@ pub(crate) fn rotate_rgba(data: Vec<u8>, w: u32, h: u32, degrees: u32) -> (Vec<u
     }
 }
 
+/// How far (seconds) before a seek target full decoding resumes. It has to cover the
+/// decoder's reordering, so the frame on screen at the target is never one that
+/// was skipped.
+const CATCH_UP_MARGIN_SECS: f64 = 1.0;
+
+/// How a [`VideoDecoder`] (or [`FrameReader`](crate::FrameReader)) decodes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct DecodeOptions {
+    /// GPU decoding. Defaults to [`HwPolicy::Off`] (software).
+    pub hw: HwPolicy,
+}
+
+/// The plain software decoder, exactly as used when GPU decoding is off.
+fn software_decoder(params: ffmpeg::codec::Parameters) -> Result<ffmpeg::decoder::Video> {
+    let mut ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
+    ctx.set_threading(ffmpeg::threading::Config {
+        kind: ffmpeg::threading::Type::Frame,
+        count: 0, // 0 = pick automatically from CPU count
+    });
+    Ok(ctx.decoder().video()?)
+}
+
+/// A decoder that decodes on the GPU described by `setup`.
+fn hardware_decoder(
+    params: ffmpeg::codec::Parameters,
+    setup: HwSetup,
+) -> Result<ffmpeg::decoder::Video> {
+    let mut ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
+    // One thread: the GPU does the decoding. Extra frame threads only wait on
+    // the GPU, and on this laptop their waiting cost more CPU than software
+    // decoding (4K HEVC: 16 fps with them, 27 fps without).
+    ctx.set_threading(ffmpeg::threading::Config {
+        kind: ffmpeg::threading::Type::Frame,
+        count: 1,
+    });
+    // While seeking we keep up to two decoded frames on the GPU (the candidate
+    // and the read-ahead frame); reserve surfaces for them.
+    // SAFETY: `ctx` is a valid codec context that has not been opened yet.
+    unsafe { (*ctx.as_mut_ptr()).extra_hw_frames = 2 };
+    let codec = setup.codec;
+    setup.attach(&mut ctx);
+    Ok(ctx.decoder().open_as(codec)?.video()?)
+}
+
+/// GPU decoding in use: which API, and the pixel format its frames arrive in.
+#[derive(Clone, Copy)]
+struct GpuState {
+    api: HwApi,
+    format: ffmpeg::ffi::AVPixelFormat,
+    /// The stream is full-range `yuvj420p`; label downloaded frames the same way.
+    full_range: bool,
+}
+
+/// After switching from GPU to software mid-stream: skip frames we already returned.
+struct Resume {
+    /// Pts of the last frame returned before the switch.
+    after: f64,
+    /// Where we seeked to resume.
+    from: f64,
+    /// How far to step back if that seek landed too late.
+    step: f64,
+}
+
 /// Sequential video decoder that yields RGBA frames and can seek.
 ///
 /// Frames come out in presentation order. [`VideoDecoder::seek`] is
 /// frame-accurate: after it, the next frame returned is the one that is on
 /// screen at the requested time.
 pub struct VideoDecoder {
+    path: std::path::PathBuf,
     ictx: ffmpeg::format::context::Input,
     stream_index: usize,
     time_base: ffmpeg::Rational,
     origin_secs: f64,
     decoder: ffmpeg::decoder::Video,
-    /// GPU session, if decoding on the GPU. Declared after `decoder` so the
-    /// decoder (which points into it) is dropped first.
-    hw: Option<crate::hwaccel::HwSession>,
-    /// Frames the GPU has produced so far (0 means a failure can still fall back).
-    hw_frames: u64,
-    /// Why GPU decoding was given up on, if it was.
-    hw_fallback: Option<String>,
     scaler: Option<(Pixel, u32, u32, Scaler)>,
     /// Matrix table id and source range the scaler was configured for.
     scaler_colour: Option<(i32, bool)>,
@@ -161,87 +221,51 @@ pub struct VideoDecoder {
     seek_pos: f64,
     /// How far to step back if a seek lands after its target.
     retry_step: f64,
-}
-
-/// Create a video decoder for `stream`, on the GPU when `hw` asks for it.
-/// With `HwMode::Auto`, any GPU problem quietly yields a software decoder.
-fn build_decoder(
-    stream: &ffmpeg::format::stream::Stream,
-    hw: &HwMode,
-) -> Result<(ffmpeg::decoder::Video, Option<hwaccel::HwSession>)> {
-    let attempt = |mode: &HwMode| -> Result<(ffmpeg::decoder::Video, Option<hwaccel::HwSession>)> {
-        let params = stream.parameters();
-        let id = params.id();
-        let mut ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
-        let session = match (mode, ffmpeg::decoder::find(id)) {
-            (HwMode::Off, _) | (_, None) => None,
-            // SAFETY: `ctx` is a valid, not yet opened codec context and `codec` a valid decoder.
-            (m, Some(codec)) => unsafe { hwaccel::attach(ctx.as_mut_ptr(), codec.as_ptr(), m)? },
-        };
-        ctx.set_threading(ffmpeg::threading::Config {
-            kind: ffmpeg::threading::Type::Frame,
-            // GPU decoders do their own parallelism; 0 = pick from CPU count.
-            count: if session.is_some() { 1 } else { 0 },
-        });
-        Ok((ctx.decoder().video()?, session))
-    };
-    match attempt(hw) {
-        Err(_) if *hw == HwMode::Auto => attempt(&HwMode::Off),
-        other => other,
-    }
+    options: DecodeOptions,
+    /// Set while decoding on the GPU.
+    gpu: Option<GpuState>,
+    /// The GPU this decoder started on, kept after a fallback so frames it
+    /// decoded earlier (still in GPU memory) can be recognised and downloaded.
+    hw_frames: Option<GpuState>,
+    /// Why GPU decoding was asked for but is not in use.
+    hw_note: Option<String>,
+    /// Pts of the last frame `decode_raw` produced since the last seek.
+    last_raw_pts: Option<f64>,
+    resume: Option<Resume>,
+    /// True once the file was reopened from its very beginning for this seek.
+    rewound: bool,
+    /// While fast-forwarding from the keyframe to a seek target, unreferenced
+    /// frames are skipped for packets before this time (software decoding only).
+    skip_until: Option<f64>,
+    /// Frames downloaded from the GPU so far.
+    gpu_frames: u64,
+    /// Testing aid: pretend the GPU download fails after this many frames.
+    fail_gpu_after: Option<u64>,
+    /// System-memory frames GPU frames are downloaded into, reused.
+    gpu_bufs: crate::hwaccel::DownloadBuffers,
 }
 
 impl VideoDecoder {
-    /// Which GPU backend is decoding (`cuda`, `vaapi`, ...), or `None` for software.
-    pub fn hw_backend(&self) -> Option<&str> {
-        self.hw.as_ref().map(|h| h.name.as_str())
-    }
-
-    /// If GPU decoding was tried and abandoned, why.
-    pub fn hw_fallback_reason(&self) -> Option<&str> {
-        self.hw_fallback.as_deref()
-    }
-
-    /// Give up on the GPU and continue in software from the last seek position.
-    fn switch_to_software(&mut self, reason: String) -> Result<()> {
-        let stream = self
-            .ictx
-            .stream(self.stream_index)
-            .ok_or(Error::NoStream("video"))?;
-        let (decoder, _) = build_decoder(&stream, &HwMode::Off)?;
-        self.decoder = decoder;
-        self.hw = None;
-        self.hw_fallback = Some(reason);
-        self.scaler = None;
-        let pos = self.seek_pos;
-        self.reseek(pos)
-    }
-
     /// Open the best video stream of `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_stream(path, None)
     }
 
-    /// Open the best video stream, optionally decoding on the GPU.
-    ///
-    /// With [`HwMode::Auto`] a GPU is used when one works for this codec and
-    /// software decoding is used otherwise; the result is identical either way
-    /// (up to tiny rounding differences). Check [`hw_backend`](Self::hw_backend)
-    /// to see which was used.
-    pub fn open_with(path: impl AsRef<Path>, hw: HwMode) -> Result<Self> {
-        Self::open_stream_with(path, None, hw)
+    /// Open the best video stream of `path` with the given options.
+    pub fn open_with(path: impl AsRef<Path>, options: DecodeOptions) -> Result<Self> {
+        Self::open_stream_with(path, None, options)
     }
 
     /// Open a specific video stream (`None` picks the best one).
     pub fn open_stream(path: impl AsRef<Path>, stream_index: Option<usize>) -> Result<Self> {
-        Self::open_stream_with(path, stream_index, HwMode::Off)
+        Self::open_stream_with(path, stream_index, DecodeOptions::default())
     }
 
-    /// Open a specific video stream with a hardware mode.
+    /// Open a specific video stream (`None` picks the best one) with the given options.
     pub fn open_stream_with(
         path: impl AsRef<Path>,
         stream_index: Option<usize>,
-        hw: HwMode,
+        options: DecodeOptions,
     ) -> Result<Self> {
         let path = path.as_ref();
         let ictx = open_input(path)?;
@@ -260,9 +284,7 @@ impl VideoDecoder {
         let time_base = stream.time_base();
         let origin_secs = start_offset_secs(&stream);
 
-        let (decoder, session) = build_decoder(&stream, &hw)?;
-        // Read before the first frame: with GPU decoding the format switches to a GPU one afterwards.
-        let coded_format = decoder.format();
+        let (decoder, gpu, hw_note) = open_video_decoder(stream.parameters(), options.hw)?;
 
         let avg = Rational::from(stream.avg_frame_rate());
         let info = VideoStreamInfo {
@@ -270,7 +292,7 @@ impl VideoDecoder {
             codec: stream.parameters().id().name().to_string(),
             width: decoder.width(),
             height: decoder.height(),
-            pixel_format: format!("{coded_format:?}").to_lowercase(),
+            pixel_format: format!("{:?}", decoder.format()).to_lowercase(),
             frame_rate: avg.is_valid().then_some(avg),
             time_base: Rational::from(time_base),
             frames: u64::try_from(stream.frames()).ok().filter(|&n| n > 0),
@@ -281,14 +303,12 @@ impl VideoDecoder {
         };
 
         Ok(Self {
+            path: path.to_path_buf(),
             ictx,
             stream_index: index,
             time_base,
             origin_secs,
             decoder,
-            hw: session,
-            hw_frames: 0,
-            hw_fallback: None,
             scaler: None,
             scaler_colour: None,
             info,
@@ -297,7 +317,144 @@ impl VideoDecoder {
             target: None,
             seek_pos: 0.0,
             retry_step: 1.0,
+            skip_until: None,
+            rewound: false,
+            options,
+            gpu,
+            hw_frames: gpu,
+            hw_note,
+            last_raw_pts: None,
+            resume: None,
+            gpu_frames: 0,
+            fail_gpu_after: None,
+            gpu_bufs: Default::default(),
         })
+    }
+
+    /// The GPU API decoding this stream, or `None` for software.
+    ///
+    /// Settled once the first frame is decoded: a GPU that turns out not to
+    /// support the stream switches to software (with [`HwPolicy::Auto`]).
+    pub fn hw_backend(&self) -> Option<HwApi> {
+        self.gpu.map(|g| g.api)
+    }
+
+    /// Why GPU decoding was requested but is not being used, if it was.
+    pub fn hw_fallback_reason(&self) -> Option<&str> {
+        self.hw_note.as_deref()
+    }
+
+    /// Testing aid: make the GPU frame download fail after `frames` more frames,
+    /// to exercise the fallback to software. No effect when decoding in software.
+    #[doc(hidden)]
+    pub fn simulate_gpu_failure_after(&mut self, frames: u64) {
+        self.fail_gpu_after = Some(self.gpu_frames + frames);
+    }
+
+    /// Is `frame` still in GPU memory (decoded by `gpu`)?
+    fn on_gpu(frame: &ffmpeg::frame::Video, gpu: GpuState) -> bool {
+        // SAFETY: `frame` is a valid frame; we only read its format field.
+        unsafe { (*frame.as_ptr()).format == gpu.format as i32 }
+    }
+
+    /// Copy a GPU frame into system memory. `Err` carries the reason the GPU
+    /// cannot be used any more.
+    fn download_gpu_frame(
+        &mut self,
+        frame: &ffmpeg::frame::Video,
+        gpu: GpuState,
+    ) -> std::result::Result<ffmpeg::frame::Video, String> {
+        if self.fail_gpu_after.is_some_and(|n| self.gpu_frames >= n) {
+            return Err("simulated GPU failure".to_string());
+        }
+        let mut sw = crate::hwaccel::download(frame, &mut self.gpu_bufs)?;
+        match sw.format() {
+            Pixel::YUV420P if gpu.full_range => {
+                // SAFETY: yuvj420p has the same layout as yuv420p; only the label changes,
+                // so the RGBA conversion picks full range exactly as for software frames.
+                unsafe {
+                    (*sw.as_mut_ptr()).format =
+                        ffmpeg::ffi::AVPixelFormat::from(Pixel::YUVJ420P) as i32
+                };
+            }
+            Pixel::YUV420P | Pixel::P010LE => {}
+            other => {
+                return Err(format!(
+                    "{} returned {other:?} frames; only 4:2:0 video is decoded on the GPU",
+                    gpu.api
+                ))
+            }
+        }
+        self.gpu_frames += 1;
+        Ok(sw)
+    }
+
+    /// Stop using the GPU and continue in software after the frame at `after`
+    /// (`None`: nothing returned since the last seek, so redo that seek).
+    fn fall_back(&mut self, reason: String, after: Option<f64>) -> Result<()> {
+        if let HwPolicy::Require(api) = self.options.hw {
+            // Stay on the GPU so later calls report the same error.
+            return Err(Error::Unsupported(format!(
+                "{api} decoding failed: {reason}"
+            )));
+        }
+        self.gpu = None;
+        self.hw_note = Some(reason);
+        self.fail_gpu_after = None;
+        // A read-ahead frame comes after `after`; it will be decoded again.
+        let after = match self.held.take() {
+            Some(h) => Some(after.unwrap_or(f64::MAX).min(self.pts_secs(&h) - 1e-4)),
+            None => after,
+        };
+        let params = self
+            .ictx
+            .stream(self.stream_index)
+            .ok_or(Error::NoStream("video"))?
+            .parameters();
+        self.decoder = software_decoder(params)?;
+        self.eof_sent = false;
+        // Restart from the keyframe before `after` and skip what was already returned.
+        let from = after.unwrap_or(self.seek_pos).max(0.0);
+        self.resume = after.map(|after| Resume {
+            after,
+            from,
+            step: 1.0,
+        });
+        seek_on_stream(
+            &mut self.ictx,
+            self.stream_index,
+            self.time_base,
+            from + self.origin_secs,
+        )
+    }
+
+    /// Apply [`Resume`] to a frame decoded after a fallback: `false` means drop it.
+    fn keep_after_resume(&mut self, pts: f64) -> Result<bool> {
+        let Some(r) = self.resume.as_mut() else {
+            return Ok(true);
+        };
+        if pts <= r.after + 1e-6 {
+            return Ok(false);
+        }
+        // The first frame we keep must be the one right after `after`. If the
+        // seek landed later (MPEG-TS and friends), step back and try again.
+        let frame_gap = 1.5 / self.info.frame_rate.map_or(25.0, Rational::as_f64).max(1.0);
+        if pts > r.after + frame_gap && r.from > 0.0 {
+            r.from = (r.from - r.step).max(0.0);
+            r.step *= 2.0;
+            let from = r.from;
+            seek_on_stream(
+                &mut self.ictx,
+                self.stream_index,
+                self.time_base,
+                from + self.origin_secs,
+            )?;
+            self.decoder.flush();
+            self.eof_sent = false;
+            return Ok(false);
+        }
+        self.resume = None;
+        Ok(true)
     }
 
     /// Description of the stream being decoded.
@@ -322,18 +479,6 @@ impl VideoDecoder {
 
     /// Next raw decoded frame in presentation order, `None` at end of stream.
     fn decode_raw(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
-        match self.decode_raw_inner() {
-            // The GPU failed before producing anything (unsupported profile, driver
-            // trouble): carry on in software instead of failing the whole clip.
-            Err(e) if self.hw.is_some() && self.hw_frames == 0 => {
-                self.switch_to_software(e.to_string())?;
-                self.decode_raw_inner()
-            }
-            other => other,
-        }
-    }
-
-    fn decode_raw_inner(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
         if let Some(f) = self.held.take() {
             return Ok(Some(f));
         }
@@ -341,14 +486,28 @@ impl VideoDecoder {
             let mut frame = ffmpeg::frame::Video::empty();
             match self.decoder.receive_frame(&mut frame) {
                 Ok(()) => {
-                    if hwaccel::is_hw_frame(&frame) {
-                        frame = hwaccel::download(&frame)?;
-                        self.hw_frames += 1;
+                    if let Some(gpu) = self.gpu.filter(|g| !Self::on_gpu(&frame, *g)) {
+                        // The decoder chose software output: this GPU cannot decode the stream.
+                        let reason = format!(
+                            "{} cannot decode this stream ({} {}x{})",
+                            gpu.api, self.info.codec, self.info.width, self.info.height
+                        );
+                        self.fall_back(reason, self.last_raw_pts)?;
+                        continue;
                     }
+                    let pts = self.pts_secs(&frame);
+                    if !self.keep_after_resume(pts)? {
+                        continue;
+                    }
+                    self.last_raw_pts = Some(pts);
                     return Ok(Some(frame));
                 }
                 Err(ffmpeg::Error::Eof) => return Ok(None),
                 Err(e) if is_again(&e) => {}
+                Err(e) if self.gpu.is_some() => {
+                    self.fall_back(e.to_string(), self.last_raw_pts)?;
+                    continue;
+                }
                 Err(e) => return Err(e.into()),
             }
             if self.eof_sent {
@@ -362,9 +521,13 @@ impl VideoDecoder {
                         if packet.stream() != self.stream_index {
                             continue;
                         }
+                        self.note_packet(&packet);
                         match self.decoder.send_packet(&packet) {
                             Ok(()) | Err(ffmpeg::Error::InvalidData) => {}
                             Err(e) if is_again(&e) => {}
+                            Err(e) if self.gpu.is_some() => {
+                                self.fall_back(e.to_string(), self.last_raw_pts)?
+                            }
                             Err(e) => return Err(e.into()),
                         }
                         break;
@@ -427,11 +590,99 @@ impl VideoDecoder {
 
     /// Decode the next frame, or `None` at the end of the stream.
     pub fn next_frame(&mut self) -> Result<Option<VideoFrame>> {
-        let Some(target) = self.target.take() else {
-            return match self.decode_raw()? {
-                Some(raw) => Ok(Some(self.convert(&raw)?)),
-                None => Ok(None),
+        loop {
+            let target = self.target;
+            let Some(raw) = self.next_raw()? else {
+                return Ok(None);
             };
+            match self.bring_to_memory(raw)? {
+                Some(frame) => return Ok(Some(self.convert(&frame)?)),
+                // The GPU failed on this frame: it is decoded again in software.
+                None => self.target = target,
+            }
+        }
+    }
+
+    /// Bring the frame chosen by [`next_raw`](Self::next_raw) into system memory.
+    /// Only that frame is downloaded: frames skipped while seeking stay on the GPU.
+    /// `None` means the GPU failed and decoding switched to software.
+    fn bring_to_memory(
+        &mut self,
+        raw: ffmpeg::frame::Video,
+    ) -> Result<Option<ffmpeg::frame::Video>> {
+        let Some(gpu) = self.hw_frames.filter(|g| Self::on_gpu(&raw, *g)) else {
+            return Ok(Some(raw));
+        };
+        match self.download_gpu_frame(&raw, gpu) {
+            Ok(frame) => Ok(Some(frame)),
+            Err(reason) => {
+                let pts = self.pts_secs(&raw);
+                self.fall_back(reason, Some(pts - 1e-4))?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// The next frame as it left the decoder (in GPU memory when decoding on the GPU).
+    fn next_raw(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
+        let result = self.next_raw_inner();
+        // Whatever happened, normal decoding resumes after the first frame.
+        self.stop_catching_up();
+        result
+    }
+
+    /// Software decoding only: while fast-forwarding from the keyframe to a seek
+    /// target, skip frames no other frame refers to (typically many B-frames). The
+    /// frames that matter are unchanged, so output is identical, only faster.
+    ///
+    /// The decision is made per packet, as it is handed to the decoder, because the
+    /// decoder reads ahead of the frames it outputs: by the time a frame near the
+    /// target comes out, the packets after it have already been decoded.
+    fn start_catching_up(&mut self, target: f64) {
+        if self.gpu.is_some() {
+            return;
+        }
+        self.skip_until = Some(target - CATCH_UP_MARGIN_SECS);
+        self.set_discard(ffmpeg::ffi::AVDiscard::AVDISCARD_NONREF);
+    }
+
+    fn stop_catching_up(&mut self) {
+        if self.skip_until.take().is_some() {
+            self.set_discard(ffmpeg::ffi::AVDiscard::AVDISCARD_DEFAULT);
+        }
+    }
+
+    /// Called before each packet is decoded: resume full decoding once the
+    /// packets get close to the seek target.
+    fn note_packet(&mut self, packet: &ffmpeg::Packet) {
+        let Some(limit) = self.skip_until else {
+            return;
+        };
+        let near = match packet.pts().or(packet.dts()) {
+            Some(p) => {
+                let tb = f64::from(self.time_base.numerator())
+                    / f64::from(self.time_base.denominator().max(1));
+                p as f64 * tb - self.origin_secs >= limit
+            }
+            None => true,
+        };
+        if near {
+            self.stop_catching_up();
+        }
+    }
+
+    fn set_discard(&mut self, mode: ffmpeg::ffi::AVDiscard) {
+        // SAFETY: `self.decoder` owns a valid, open codec context. `skip_frame` is a
+        // plain field FFmpeg documents as changeable while decoding; frame threads
+        // pick the new value up before the next frame they decode.
+        unsafe {
+            (*self.decoder.as_mut_ptr()).skip_frame = mode;
+        }
+    }
+
+    fn next_raw_inner(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
+        let Some(target) = self.target.take() else {
+            return self.decode_raw();
         };
 
         // Just after a seek: decode forward and return the last frame whose
@@ -451,10 +702,12 @@ impl VideoDecoder {
                         self.reseek(back_to)?;
                         continue;
                     }
-                    return match previous {
-                        Some(raw) => Ok(Some(self.convert(&raw)?)),
-                        None => Ok(None),
-                    };
+                    if previous.is_none() && !self.rewound {
+                        // Not even a seek to time zero found anything: start over.
+                        self.rewind()?;
+                        continue;
+                    }
+                    return Ok(previous);
                 }
                 Some(raw) => {
                     let pts = self.pts_secs(&raw);
@@ -462,6 +715,14 @@ impl VideoDecoder {
                         let back_to = (self.seek_pos - self.retry_step).max(0.0);
                         self.retry_step *= 2.0;
                         self.reseek(back_to)?;
+                        continue;
+                    }
+                    if previous.is_none() && pts > target + 1e-6 && !self.rewound {
+                        // Seeking to time zero still lands after the target. This is
+                        // what MPEG-TS with B-frames does: no keyframe is listed at or
+                        // before the start, so the seek jumps to a later one. The
+                        // stream really begins at the start of the file.
+                        self.rewind()?;
                         continue;
                     }
                     if pts > target + 1e-6 {
@@ -473,12 +734,28 @@ impl VideoDecoder {
                             }
                             None => raw,
                         };
-                        return Ok(Some(self.convert(&chosen)?));
+                        return Ok(Some(chosen));
                     }
                     previous = Some(raw);
                 }
             }
         }
+    }
+
+    /// Start again from the very first packet of the file, whatever the seek index
+    /// says. Used when seeking to time zero cannot find the first frames.
+    fn rewind(&mut self) -> Result<()> {
+        self.ictx = open_input(&self.path)?;
+        self.decoder.flush();
+        self.eof_sent = false;
+        self.held = None;
+        self.seek_pos = 0.0;
+        self.last_raw_pts = None;
+        self.resume = None;
+        self.rewound = true;
+        // Everything from the start is needed up to the target, but skipping
+        // unreferenced frames is still safe and unchanged.
+        Ok(())
     }
 
     /// Low-level seek used by [`seek`](Self::seek) and its retry logic.
@@ -493,6 +770,8 @@ impl VideoDecoder {
         self.eof_sent = false;
         self.held = None;
         self.seek_pos = secs;
+        self.last_raw_pts = None;
+        self.resume = None;
         Ok(())
     }
 
@@ -502,7 +781,9 @@ impl VideoDecoder {
         let secs = secs.max(0.0);
         self.reseek(secs)?;
         self.retry_step = 1.0;
+        self.rewound = false;
         self.target = Some(secs);
+        self.start_catching_up(secs);
         Ok(())
     }
 
@@ -511,6 +792,57 @@ impl VideoDecoder {
         self.seek(secs)?;
         self.next_frame()
     }
+}
+
+/// Open the video decoder for `params` following `policy`.
+/// Returns the decoder, the GPU state if it is on the GPU, and why not if GPU was asked for.
+fn open_video_decoder(
+    params: ffmpeg::codec::Parameters,
+    policy: HwPolicy,
+) -> Result<(ffmpeg::decoder::Video, Option<GpuState>, Option<String>)> {
+    let apis: &[HwApi] = match &policy {
+        HwPolicy::Off => return Ok((software_decoder(params)?, None, None)),
+        HwPolicy::Auto => &HwApi::ALL,
+        HwPolicy::Require(api) => std::slice::from_ref(api),
+    };
+    let mut reasons = Vec::new();
+    // The GPU path is built (and tested) for 8/10-bit 4:2:0, by far the most common
+    // case. Other layouts (4:2:2, 4:4:4, RGB) stay in software; some GPUs claim
+    // them but decode them wrongly.
+    // SAFETY: `params` wraps valid codec parameters; we only read the format field.
+    let coded = unsafe { (*params.as_ptr()).format };
+    let is = |p: Pixel| coded == ffmpeg::ffi::AVPixelFormat::from(p) as i32;
+    let full_range = is(Pixel::YUVJ420P);
+    let gpu_layout = coded == ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NONE as i32
+        || is(Pixel::YUV420P)
+        || full_range
+        || is(Pixel::YUV420P10LE);
+    if !gpu_layout {
+        reasons.push("GPU decoding handles 8/10-bit 4:2:0 video only".to_string());
+    }
+    for &api in apis.iter().filter(|_| gpu_layout) {
+        let attempt = HwSetup::new(api, params.id()).and_then(|setup| {
+            let format = setup.hw_format;
+            hardware_decoder(params.clone(), setup)
+                .map(|dec| {
+                    let gpu = GpuState {
+                        api,
+                        format,
+                        full_range,
+                    };
+                    (dec, gpu)
+                })
+                .map_err(|e| format!("{api} decoder: {e}"))
+        });
+        match attempt {
+            Ok((dec, gpu)) => return Ok((dec, Some(gpu), None)),
+            Err(reason) => reasons.push(reason),
+        }
+    }
+    if matches!(policy, HwPolicy::Require(_)) {
+        return Err(Error::Unsupported(reasons.join("; ")));
+    }
+    Ok((software_decoder(params)?, None, Some(reasons.join("; "))))
 }
 
 impl Iterator for VideoDecoder {

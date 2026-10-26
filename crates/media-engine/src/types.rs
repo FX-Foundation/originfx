@@ -108,6 +108,29 @@ pub struct SubtitleStreamInfo {
     pub index: usize,
     pub codec: String,
     pub language: Option<String>,
+    pub title: Option<String>,
+    /// True for text subtitles (SRT, ASS, WebVTT, mov_text...), which can be read
+    /// with [`crate::read_subtitles`] and exported. Picture subtitles (PGS, DVD, DVB) are `false`.
+    pub text_based: bool,
+    pub default: bool,
+    pub forced: bool,
+}
+
+/// One chapter marker. Times are seconds from the start of the file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chapter {
+    pub start_secs: f64,
+    pub end_secs: f64,
+    pub title: Option<String>,
+}
+
+/// One line of subtitle text and when it is shown (seconds from the start of the media).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubtitleCue {
+    pub start_secs: f64,
+    pub end_secs: f64,
+    /// Plain text; line breaks are `\n`. Styling and positioning are dropped.
+    pub text: String,
 }
 
 /// Everything [`crate::probe`] learns about a file.
@@ -122,6 +145,7 @@ pub struct MediaInfo {
     pub video: Vec<VideoStreamInfo>,
     pub audio: Vec<AudioStreamInfo>,
     pub subtitles: Vec<SubtitleStreamInfo>,
+    pub chapters: Vec<Chapter>,
     pub metadata: BTreeMap<String, String>,
 }
 

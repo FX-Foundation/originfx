@@ -194,3 +194,80 @@ pub fn colour_error(frame: &media_engine::VideoFrame) -> i32 {
         .max()
         .unwrap()
 }
+
+/// GPU APIs that can open a device on this machine (empty on CI).
+/// Opens only CUDA and VA-API devices: probing every FFmpeg device type
+/// (VDPAU, QSV, ...) from parallel test threads can crash some drivers.
+pub fn gpu_apis() -> Vec<media_engine::HwApi> {
+    static APIS: std::sync::OnceLock<Vec<media_engine::HwApi>> = std::sync::OnceLock::new();
+    APIS.get_or_init(|| {
+        media_engine::HwApi::ALL
+            .into_iter()
+            .filter(|api| api.is_usable())
+            .collect()
+    })
+    .clone()
+}
+
+/// Skip the current test unless `ffmpeg` is installed and a GPU decoder can be opened.
+#[macro_export]
+macro_rules! require_gpu {
+    () => {{
+        $crate::require_ffmpeg!();
+        let apis = $crate::common::gpu_apis();
+        if apis.is_empty() {
+            eprintln!("skipping: no usable GPU (cuda / vaapi) on this machine");
+            return;
+        }
+        apis
+    }};
+}
+
+/// The numbered frames of [`id_clip`] at 256x256 (above every GPU's minimum
+/// size), encoded with `codec_args` in a form GPUs decode: lossy 4:2:0 at very
+/// high quality. `id_clip` itself is lossless High 4:4:4, which GPUs reject.
+pub fn gpu_id_clip(dir: &Path, name: &str, codec_args: &[&str]) -> PathBuf {
+    let out = dir.join(name);
+    if !out.exists() {
+        let mut args = vec![
+            "-f",
+            "lavfi",
+            "-i",
+            "nullsrc=size=256x256:rate=30:duration=2,geq=r='255-N':g='N*4':b='128'",
+        ];
+        args.extend_from_slice(codec_args);
+        args.push(out.to_str().unwrap());
+        run(&args);
+    }
+    out
+}
+
+/// Which frame of `reference` (software-decoded, in order) is `frame`, by exact
+/// pixel match; -1 when it matches none. Lossy clips do not carry an exact green
+/// value, so this both numbers a GPU frame and proves it equals software.
+pub fn frame_id(reference: &[media_engine::VideoFrame], frame: &media_engine::VideoFrame) -> i64 {
+    reference
+        .iter()
+        .position(|r| r.data == frame.data)
+        .map_or(-1, |i| i as i64)
+}
+
+/// True when NVENC can be used here: a CUDA device opens and FFmpeg has `h264_nvenc`.
+pub fn nvenc_available() -> bool {
+    gpu_apis().contains(&media_engine::HwApi::Cuda)
+        && media_engine::hwaccel::hardware_codecs()
+            .iter()
+            .any(|c| c == "h264_nvenc")
+}
+
+/// Skip the current test unless `ffmpeg` is installed and NVENC can be used.
+#[macro_export]
+macro_rules! require_nvenc {
+    () => {
+        $crate::require_ffmpeg!();
+        if !$crate::common::nvenc_available() {
+            eprintln!("skipping: NVENC (CUDA) is not available on this machine");
+            return;
+        }
+    };
+}
