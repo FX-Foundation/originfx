@@ -31,16 +31,28 @@ This is not a side project. This is a movement.
 
 ## Current Status
 
-> OriginFX is in early development. The foundation is being laid.
+> OriginFX is in early development. The first engine is done; the rest are being designed.
 
-We are currently in the **architecture and scaffolding phase**. Core systems being designed:
+**The Media Engine is built and tested.** It is a Rust library plus a small `originfx`
+command-line tool that opens any video, reports what is inside it, jumps to any frame
+exactly, caches frames, writes 19 export formats, makes proxies, carries subtitles and
+chapters, and can use the GPU (NVIDIA CUDA and NVENC, VA-API) when asked. Software output
+is the default and GPU use is always opt-in.
 
-- [ ] Project structure and workspace layout
+- [x] Project structure and workspace layout
+- [x] Media import/decode layer (FFmpeg integration): the [Media Engine](docs/MEDIA_ENGINE.md)
 - [ ] Core timeline data model
 - [ ] Renderer pipeline (GPU-accelerated)
-- [ ] Media import/decode layer (FFmpeg integration)
 - [ ] Plugin/extension system
 - [ ] UI framework selection
+
+**Try it** (Ubuntu 24.04; full steps in [docs/MEDIA_ENGINE.md](docs/MEDIA_ENGINE.md#2-quick-start)):
+
+```bash
+git clone https://github.com/FX-Foundation/originfx && cd originfx
+cargo build --release
+./target/release/originfx probe ~/Videos/clip.mp4
+```
 
 This is the moment to get involved. The decisions made now will shape everything.
 

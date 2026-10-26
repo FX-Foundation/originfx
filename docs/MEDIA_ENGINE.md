@@ -91,13 +91,14 @@ cargo build --release
 ```
 originfx <COMMAND>
 
-  probe    Show what is inside a media file
-  convert  Convert a file using an export preset
-  presets  List export presets and whether this machine can produce them
-  frame    Save one frame as a PNG
-  proxy    Create (or find) the low-resolution proxy for a file
-  hw       Report which GPU acceleration APIs this machine exposes
-  bench    Measure decode speed
+  probe      Show what is inside a media file
+  convert    Convert a file using an export preset
+  subtitles  Print a text subtitle track as SRT
+  presets    List export presets and whether this machine can produce them
+  frame      Save one frame as a PNG
+  proxy      Create (or find) the low-resolution proxy for a file
+  hw         Report which GPU acceleration APIs this machine exposes
+  bench      Measure decode speed
 ```
 
 ### `probe`: what's in this file?
@@ -116,8 +117,9 @@ clip.mp4
 ```
 
 Subtitle tracks show their language, title, `default` / `forced` flags, and `picture` for
-picture formats (PGS, DVD) that cannot be read as text. Add `--json` for machine-readable output. Portrait phone clips are reported with their
-rotation, e.g. `rotated 90° (shows as 1080x1920)`.
+picture formats (PGS, DVD) that cannot be read as text. Add `--json` for machine-readable
+output. Portrait phone clips are reported with their rotation, e.g.
+`rotated 90° (shows as 1080x1920)`.
 
 ### `convert`: change format, size or frame rate
 
@@ -173,8 +175,8 @@ Running it again prints `existing proxy: ...` and does no work.
 ### `presets`, `hw`, `bench`
 
 - `presets` lists all 19 formats and whether your FFmpeg can write each one.
-- `hw` reports which GPU acceleration APIs your machine exposes (CUDA, VA-API, Quick Sync, Vulkan...) and whether a device can actually be opened. Paste its output when reporting GPU issues. The engine decodes with CUDA (NVDEC) and VA-API; it does not encode on the GPU yet.
-- `bench` measures sequential decode speed and random-access cost on a file you choose. Add `--hw auto` (or `cuda`, `vaapi`) to measure GPU decoding; it prints which backend was used.
+- `hw` reports which GPU acceleration APIs your machine exposes (CUDA, VA-API, Quick Sync, Vulkan...) and whether a device can actually be opened. Paste its output when reporting GPU issues. The engine decodes with CUDA (NVDEC) and VA-API, and encodes H.264/H.265 with NVENC (`convert --hw`); other GPU encoders are not built yet.
+- `bench` measures sequential decode speed and random-access cost on a file you choose. Add `--scrub <n>` to time stepping backwards one frame at a time, `--cache-mb <n>` to set the frame cache size for those tests (default 64), and `--hw auto` (or `cuda`, `vaapi`) to measure GPU decoding; it prints which backend was used.
 
 ---
 
@@ -438,9 +440,8 @@ instantly.
 ask for 10-bit (`ExportSettings::bit_depth(10)`), because many devices cannot play 10-bit
 H.264. You can also force 8-bit. ProRes is always 10-bit.
 
-> These 19 are a sensible starting set, chosen by the engine's author, not a final list.
-> Adding or removing one is a small edit to `crates/media-engine/src/preset.rs` (see
-> [Extending it](#11-extending-it)).
+> These 19 are the confirmed set. Adding or removing one later is a small edit to
+> `crates/media-engine/src/preset.rs` (see [Extending it](#11-extending-it)).
 
 ---
 
@@ -449,13 +450,16 @@ H.264. You can also force 8-bit. ProRes is always 10-bit.
 ```
 crates/media-engine/src/
 ├── lib.rs        crate docs, one-time FFmpeg init, public re-exports
-├── types.rs      MediaInfo, VideoFrame, AudioBuffer, Rational (no FFmpeg types)
+├── types.rs      MediaInfo, VideoFrame, AudioBuffer, Chapter, SubtitleCue, Rational (no FFmpeg types)
 ├── error.rs      Error enum
-├── probe.rs      metadata without decoding; rotation detection
-├── decode.rs     VideoDecoder, AudioDecoder, seeking, rotation
+├── probe.rs      metadata, chapters and subtitle tracks without decoding; rotation detection
+├── decode.rs     VideoDecoder, AudioDecoder, seeking, rotation, GPU decode
 ├── cache.rs      FrameCache (LRU, byte budget) and FrameReader
+├── index.rs      FrameIndex: exact frame times for variable-frame-rate footage
+├── colour.rs     YUV matrix, range and HDR tags: read, resolve, write
+├── subtitle.rs   read_subtitles: plain timed text from SRT, ASS, WebVTT, mov_text
 ├── preset.rs     ExportPreset table: container, encoders, defaults
-├── transcode.rs  the export pipeline
+├── transcode.rs  the export pipeline (video, audio, subtitles, chapters, NVENC)
 ├── proxy.rs      ProxyManager
 └── hwaccel.rs    GPU API discovery and GPU decode setup
 ```

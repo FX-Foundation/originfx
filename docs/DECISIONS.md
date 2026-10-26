@@ -1,21 +1,21 @@
-# Decisions made while building the Media Engine overnight
+# Decisions made while building the Media Engine
 
-You were away, so these were made with the sensible default. Every one can be
-reversed; none touched your existing files.
+Defaults chosen while building, each with the way to reverse it. Where the owner made the
+call, the row says so.
 
 | # | Decision | Why | Reverse it by |
 |---|----------|-----|---------------|
-| 1 | Work on branch `claude/media-engine`, not `main` | Your `main` stays untouched until you review | Merge the branch, or delete it |
+| 1 | Work happens on feature branches and reaches `main` through pull requests that pass CI | `main` always builds and passes its tests | n/a |
 | 2 | Cargo workspace at the repo root, crates under `crates/` | Room for the other 9 engines as sibling crates | Move folders |
 | 3 | FFmpeg 6.1 via the `ffmpeg-next 6.1` crate | Matches Ubuntu 24.04's FFmpeg; the newest crate versions target FFmpeg 7+ | Bump both together |
 | 4 | Decode output is RGBA8 in system memory | Simplest correct contract for now; GPU/YUV paths come with the Render Engine | See ROADMAP |
 | 5 | Export is always constant frame rate | What editors and delivery formats expect | Remove the `fps` filter |
-| 6 | Cinema RAW removed from engine scope | Your call: future plugin | See ROADMAP |
-| 7 | The 19 export presets (list in `preset.rs`) | Started as my own list; **confirmed by you on 26 Oct 2026**. Covers common web, editing and audio formats; every preset is tested | Edit `preset.rs` (one table) |
-| 8 | Licence: GPL-3.0-or-later, no CLA; crates stay `publish = false` until a release | Chosen by you. FFmpeg builds with x264/x265 are GPL, so a GPL app is the simple, honest fit. "or later" is the FSF's usual recommendation. Not publishing to crates.io yet avoids an accidental release | `LICENSE`, `Cargo.toml` |
+| 6 | Cinema RAW removed from engine scope | The owner's call: future plugin | See ROADMAP |
+| 7 | The 19 export presets (list in `preset.rs`) | Started as my own list; **confirmed by the owner on 26 Oct 2026**. Covers common web, editing and audio formats; every preset is tested | Edit `preset.rs` (one table) |
+| 8 | Licence: GPL-3.0-or-later, no CLA; crates stay `publish = false` until a release | Chosen by the owner. FFmpeg builds with x264/x265 are GPL, so a GPL app is the simple, honest fit. "or later" is the FSF's usual recommendation. Not publishing to crates.io yet avoids an accidental release | `LICENSE`, `Cargo.toml` |
 | 9 | Hardware acceleration is probe-only (superseded: GPU decode added once a GPU was available, see 12-15) | No GPU in the build environment; untested GPU code is worse than none | See ROADMAP |
-| 10 | Did not touch the root `README.md`, `CONTRIBUTING.md` or `CODE_OF_CONDUCT.md` | They are your voice | n/a |
-| 11 | A stray test branch `claude/push-test` exists on GitHub (one empty commit) | I could not delete it from here | Delete it in GitHub's Branches page |
+| 10 | The root `README.md`, `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` are the owner's voice; they were left alone until 26 Oct 2026, then updated for facts only (status, build steps, licence) at the owner's request | Keeps the project's tone consistent | n/a |
+| 11 | Merged and test branches are deleted from GitHub after use | Keeps the branch list short; the cloud tooling used here cannot delete remote branches, so the owner does it in GitHub's Branches page | n/a |
 | 12 | GPU decode API is `DecodeOptions { hw: HwPolicy::{Off, Auto, Require(HwApi)} }` | `hwaccel::HwBackend` already names the probe result, so the API enum is `HwApi { Cuda, Vaapi }` | Rename in `hwaccel.rs` |
 | 13 | GPU frames are repacked from NV12/P010 to planar `yuv420p`/`yuv420p10le` before RGBA conversion | swscale converts NV12 along a different path, so sharp colour edges differed from software by up to ~190 levels; repacking makes GPU and software frames byte-identical | `hwaccel::download` |
 | 14 | Only 8/10-bit 4:2:0 streams go to the GPU | Intel VA-API accepted RGB VP9 (profile 1) and returned wrong pixels; 4:2:0 covers almost all camera and web video | `open_video_decoder` in `decode.rs` |
