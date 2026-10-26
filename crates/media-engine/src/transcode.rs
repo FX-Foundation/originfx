@@ -15,6 +15,7 @@ use ffmpeg_next as ffmpeg;
 
 use crate::decode::start_offset_secs;
 use crate::error::{Error, Result};
+use crate::hwaccel::{HwApi, HwPolicy};
 use crate::preset::{find_encoder, AudioSpec, ExportPreset, Quality, VideoSpec};
 use crate::probe::stream_rotation;
 
@@ -47,6 +48,14 @@ pub struct ExportSettings {
     pub video_stream: Option<usize>,
     /// Container stream index of the audio track to use; `None` picks the default track.
     pub audio_stream: Option<usize>,
+    /// GPU video encoding (NVIDIA NVENC) for the H.264 and H.265 presets.
+    /// Defaults to [`HwPolicy::Off`] (software). With [`HwPolicy::Auto`] the export
+    /// quietly runs in software when NVENC cannot be used, including when it fails
+    /// part-way (the export then restarts in software, so progress starts again).
+    pub hw_encode: HwPolicy,
+    /// Testing aid: make the GPU encoder fail after this many frames.
+    #[doc(hidden)]
+    pub simulate_gpu_failure_after: Option<u64>,
 }
 
 impl ExportSettings {
@@ -65,6 +74,8 @@ impl ExportSettings {
             bit_depth: None,
             video_stream: None,
             audio_stream: None,
+            hw_encode: HwPolicy::Off,
+            simulate_gpu_failure_after: None,
         }
     }
 
@@ -109,6 +120,12 @@ impl ExportSettings {
     /// Force 8-bit or 10-bit video output (see [`ExportSettings::bit_depth`]).
     pub fn bit_depth(mut self, bits: u8) -> Self {
         self.bit_depth = Some(bits);
+        self
+    }
+
+    /// Encode video on the GPU (see [`ExportSettings::hw_encode`]).
+    pub fn hw_encode(mut self, policy: HwPolicy) -> Self {
+        self.hw_encode = policy;
         self
     }
 
@@ -186,6 +203,8 @@ pub struct ExportReport {
     pub duration_secs: f64,
     pub output_bytes: u64,
     pub elapsed: Duration,
+    /// Why GPU encoding was requested but the video was encoded in software.
+    pub hw_fallback_reason: Option<String>,
 }
 
 /// Export without progress reporting.
@@ -212,11 +231,66 @@ pub fn export_with_progress(
     }
     settings.preset.check_available()?;
 
-    let result = run_export(input, output, settings, on_progress);
+    let mut on_progress = on_progress;
+    let gpu = match (settings.hw_encode, nvenc_encoder(settings)) {
+        (HwPolicy::Off, _) => Ok(None),
+        (_, Ok(name)) => Ok(Some(name)),
+        (HwPolicy::Auto, Err(reason)) => Err(reason),
+        (HwPolicy::Require(_), Err(reason)) => return Err(Error::Unsupported(reason)),
+    };
+    let result = match gpu {
+        Ok(None) => run_export(input, output, settings, None, &mut on_progress),
+        Err(reason) => {
+            run_export(input, output, settings, None, &mut on_progress).map(|r| ExportReport {
+                hw_fallback_reason: Some(reason),
+                ..r
+            })
+        }
+        Ok(Some(name)) => match run_export(input, output, settings, Some(name), &mut on_progress) {
+            Err(e) if settings.hw_encode == HwPolicy::Auto && !matches!(e, Error::Cancelled) => {
+                // Anything going wrong with NVENC is retried in software from the
+                // start; a problem that is not the GPU's fails again there.
+                let _ = std::fs::remove_file(output);
+                run_export(input, output, settings, None, &mut on_progress).map(|r| ExportReport {
+                    hw_fallback_reason: Some(format!("{name} failed: {e}")),
+                    ..r
+                })
+            }
+            other => other,
+        },
+    };
     if result.is_err() {
         let _ = std::fs::remove_file(output);
     }
     result
+}
+
+/// The NVENC encoder for this export, or why it cannot be used.
+fn nvenc_encoder(settings: &ExportSettings) -> std::result::Result<&'static str, String> {
+    use ExportPreset::*;
+    if let HwPolicy::Require(HwApi::Vaapi) = settings.hw_encode {
+        return Err("GPU encoding supports NVIDIA (cuda) only so far, not vaapi".into());
+    }
+    let name = match settings.preset {
+        Mp4H264 | MovH264 | MkvH264 => "h264_nvenc",
+        Mp4H265 | MkvH265 => "hevc_nvenc",
+        other => {
+            return Err(format!(
+                "GPU encoding covers the H.264 and H.265 presets, not {}",
+                other.label()
+            ))
+        }
+    };
+    if name == "h264_nvenc" && settings.bit_depth == Some(10) {
+        return Err("NVENC cannot write 10-bit H.264".into());
+    }
+    if ffmpeg::encoder::find_by_name(name).is_none() {
+        return Err(format!("this FFmpeg build has no {name}"));
+    }
+    if !HwApi::Cuda.is_usable() {
+        return Err("no usable CUDA device".into());
+    }
+    Ok(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +441,7 @@ fn pixel_from_name(name: &str) -> Result<Pixel> {
     Ok(match name {
         "yuv420p" => Pixel::YUV420P,
         "yuv420p10le" => Pixel::YUV420P10LE,
+        "p010le" => Pixel::P010LE,
         "yuvj420p" => Pixel::YUVJ420P,
         "yuv422p" => Pixel::YUV422P,
         "yuv422p10le" => Pixel::YUV422P10LE,
@@ -403,6 +478,34 @@ fn video_options(settings: &ExportSettings, encoder: &str) -> Vec<(&'static str,
             }
             o.push(("x265-params", "log-level=error".into()));
             o.push(("tag", "hvc1".into()));
+        }
+        "h264_nvenc" | "hevc_nvenc" => {
+            let hevc = encoder == "hevc_nvenc";
+            o.push(("preset", pick("p2", "p5", "p7")));
+            o.push(("tune", "hq".into()));
+            o.push(("rc", "vbr".into()));
+            if !by_bitrate {
+                // Constant quality with no bitrate cap, like CRF in x264/x265.
+                // Tuned against x264/x265 at the same quality level: similar
+                // quality, somewhat larger files (NVENC compresses less well).
+                let cq = if hevc {
+                    pick("32", "27", "22")
+                } else {
+                    pick("31", "26", "21")
+                };
+                o.push(("cq", cq));
+                o.push(("b", "0".into()));
+                // Without a maximum, NVENC caps itself near 21 Mbit/s, which
+                // limits 4K quality whatever `cq` asks for.
+                o.push(("maxrate", "400M".into()));
+                o.push(("bufsize", "800M".into()));
+            }
+            if hevc {
+                o.push(("tag", "hvc1".into()));
+            } else if settings.bit_depth != Some(10) {
+                // NVENC picks Main by default; High compresses better and plays everywhere.
+                o.push(("profile", "high".into()));
+            }
         }
         "libvpx-vp9" => {
             o.push(("deadline", "good".into()));
@@ -492,15 +595,19 @@ struct VideoPipe {
     frames: u64,
     last_pts_secs: f64,
     encoder_name: &'static str,
+    /// Testing aid, see [`ExportSettings::simulate_gpu_failure_after`].
+    fail_after: Option<u64>,
 }
 
 impl VideoPipe {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         ictx: &format::context::Input,
         octx: &mut format::context::Output,
         in_index: usize,
         settings: &ExportSettings,
         spec: VideoSpec,
+        gpu_encoder: Option<&'static str>,
         origin_secs: f64,
         global_header: bool,
     ) -> Result<Self> {
@@ -548,8 +655,20 @@ impl VideoPipe {
             rational_from_fps(fps_f)
         };
 
-        let (codec_found, name) = find_encoder(spec.encoders)?;
+        let (codec_found, name) = match gpu_encoder {
+            Some(n) => (
+                ffmpeg::encoder::find_by_name(n)
+                    .ok_or_else(|| Error::Unsupported(format!("encoder {n}")))?,
+                n,
+            ),
+            None => find_encoder(spec.encoders)?,
+        };
         let pix_name = output_pix_fmt(settings, &spec, decoder.format())?;
+        // NVENC takes 10-bit as P010 (same values, interleaved chroma), not planar.
+        let pix_name = match (gpu_encoder, pix_name) {
+            (Some(_), "yuv420p10le") => "p010le",
+            _ => pix_name,
+        };
         let pix = pixel_from_name(pix_name)?;
 
         let mut ost = octx.add_stream(codec_found)?;
@@ -700,6 +819,7 @@ impl VideoPipe {
             frames: 0,
             last_pts_secs: 0.0,
             encoder_name: name,
+            fail_after: gpu_encoder.and(settings.simulate_gpu_failure_after),
         })
     }
 
@@ -730,6 +850,9 @@ impl VideoPipe {
             .is_ok()
         {
             out.set_kind(picture::Type::None);
+            if self.fail_after == Some(self.frames) {
+                return Err(Error::Unsupported("simulated GPU failure".into()));
+            }
             self.encoder.send_frame(&out)?;
             self.frames += 1;
             self.encode_drain(octx)?;
@@ -1034,10 +1157,12 @@ fn patch_flac_length(path: &Path, total_samples: u64) -> std::io::Result<()> {
 
 // --- driver -----------------------------------------------------------------
 
+/// `gpu_encoder`: encode video with this NVENC encoder instead of the preset's own.
 fn run_export(
     input: &Path,
     output: &Path,
     settings: &ExportSettings,
+    gpu_encoder: Option<&'static str>,
     mut on_progress: impl FnMut(&Progress) -> bool,
 ) -> Result<ExportReport> {
     let started = Instant::now();
@@ -1113,6 +1238,7 @@ fn run_export(
             i,
             settings,
             spec,
+            gpu_encoder,
             origin_secs,
             global_header,
         )?),
@@ -1235,5 +1361,6 @@ fn run_export(
         duration_secs: out_secs,
         output_bytes: std::fs::metadata(output).map(|m| m.len()).unwrap_or(0),
         elapsed: started.elapsed(),
+        hw_fallback_reason: None,
     })
 }

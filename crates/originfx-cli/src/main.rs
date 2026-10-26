@@ -66,6 +66,10 @@ enum Command {
         /// Use this audio track (index from `probe`).
         #[arg(long)]
         audio_stream: Option<usize>,
+        /// GPU video encoding (NVENC, H.264/H.265 presets): off, auto (NVENC, else
+        /// software) or cuda (NVENC or an error). vaapi is not supported yet.
+        #[arg(long, value_enum, default_value = "off")]
+        hw: HwArg,
     },
     /// List export presets and whether this machine's FFmpeg can produce them.
     Presets,
@@ -122,15 +126,20 @@ enum HwArg {
     Vaapi,
 }
 
-impl From<HwArg> for DecodeOptions {
+impl From<HwArg> for HwPolicy {
     fn from(hw: HwArg) -> Self {
-        let hw = match hw {
+        match hw {
             HwArg::Off => HwPolicy::Off,
             HwArg::Auto => HwPolicy::Auto,
             HwArg::Cuda => HwPolicy::Require(HwApi::Cuda),
             HwArg::Vaapi => HwPolicy::Require(HwApi::Vaapi),
-        };
-        DecodeOptions { hw }
+        }
+    }
+}
+
+impl From<HwArg> for DecodeOptions {
+    fn from(hw: HwArg) -> Self {
+        DecodeOptions { hw: hw.into() }
     }
 }
 
@@ -189,6 +198,7 @@ fn run(cmd: Command) -> CliResult {
             end,
             video_stream,
             audio_stream,
+            hw,
         } => {
             let preset = match preset {
                 Some(id) => ExportPreset::from_id(&id)
@@ -204,6 +214,7 @@ fn run(cmd: Command) -> CliResult {
             s.end_secs = end;
             s.video_stream = video_stream;
             s.audio_stream = audio_stream;
+            s.hw_encode = hw.into();
 
             let tty = std::io::stderr().is_terminal();
             let report = media_engine::export_with_progress(&input, &output, &s, |p| {
@@ -234,6 +245,12 @@ fn run(cmd: Command) -> CliResult {
                 human_bytes(report.output_bytes),
                 report.elapsed.as_secs_f64()
             );
+            if let Some(enc) = &report.video_encoder {
+                match &report.hw_fallback_reason {
+                    Some(why) => println!("video encoder: {enc} (GPU not used: {why})"),
+                    None => println!("video encoder: {enc}"),
+                }
+            }
         }
         Command::Presets => {
             println!("{:<18} {:<5} {:<30} available", "id", "ext", "description");
@@ -525,7 +542,7 @@ fn print_hw() {
         }
     );
     println!(
-        "note: GPU decoding (cuda, vaapi) is used with --hw on `frame` and `bench`; GPU encoding is not used yet."
+        "note: GPU decoding (cuda, vaapi) is used with --hw on `frame` and `bench`; NVENC encoding with --hw on `convert`."
     );
 }
 

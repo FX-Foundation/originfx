@@ -131,6 +131,7 @@ clip.mp4 -> small.mp4  [MP4 (H.264 + AAC)]  50 frames, 2.0s of media, 61.5 KB in
 | `--fps <n>` | Output frame rate. |
 | `--video-kbps <n>` / `--audio-kbps <n>` | Fixed bitrates (video bitrate overrides quality). |
 | `--start <s>` / `--end <s>` | Keep only this part of the clip, in seconds from the start. Either can be left out. |
+| `--hw <off\|auto\|cuda>` | Encode H.264/H.265 on an NVIDIA GPU (NVENC). `auto` falls back to software, `cuda` fails instead. Default `off`. |
 
 A progress line is shown while it works. Pressing Ctrl-C stops the process and can leave a
 partial output file, so delete it. (Cancelling through the library's progress callback
@@ -275,6 +276,21 @@ let settings = ExportSettings::new(ExportPreset::WebmVp9)
 let report = export("in.mov", "out.webm", &settings)?;
 println!("{} frames, {} bytes", report.frames, report.output_bytes);
 ```
+
+On an NVIDIA GPU, the H.264 and H.265 presets can encode with NVENC:
+
+```rust
+use media_engine::HwPolicy;
+
+let settings = ExportSettings::new(ExportPreset::Mp4H265).hw_encode(HwPolicy::Auto);
+let report = export("in.mov", "out.mp4", &settings)?;
+println!("{:?} {:?}", report.video_encoder, report.hw_fallback_reason); // Some("hevc_nvenc"), None
+```
+
+`Auto` uses software when NVENC cannot be used (other presets, 10-bit H.264, no NVIDIA GPU,
+frames smaller than NVENC's minimum, or an NVENC error part-way, in which case the export
+starts again in software). `HwPolicy::Require(HwApi::Cuda)` returns the error instead.
+Decoding during export stays in software.
 
 With progress and cancellation:
 
@@ -444,7 +460,7 @@ numbers.
 | Export 1080p → 720p H.264, Standard quality | 20 s of video in **9.9 s**, about 2× real time |
 | Generate a 540p proxy of that clip | **4.4 s** |
 
-Exports are CPU-bound today because GPU encoders are not used yet.
+Exports are CPU-bound unless NVENC is used (see below).
 
 ### GPU decoding
 
@@ -472,12 +488,29 @@ What this means:
   Removing that copy needs zero-copy hand-off to the Render Engine.
 - `Auto` tries CUDA first, which was the faster GPU here.
 
+### GPU encoding (NVENC)
+
+Same laptop and clips, `originfx convert` at Standard quality, one run each. Quality is
+PSNR (luma) of the output against its source; higher is better.
+
+| Export | Software | NVENC | Speed-up |
+|---|---|---|---|
+| 1080p → H.264 | 6.8 s · 18.1 MB · 47.3 dB · 57 s CPU | 2.6 s · 19.3 MB · 47.9 dB · 13 s CPU | 2.6x |
+| 1080p → H.265 | 31.7 s · 17.2 MB · 45.7 dB · 145 s CPU | 2.1 s · 16.6 MB · 45.6 dB · 10 s CPU | 15x |
+| 4K 10-bit → H.265 10-bit | 112.8 s · 62.4 MB · 45.6 dB · 641 s CPU | 15.4 s · 63.0 MB · 45.7 dB · 97 s CPU | 7.3x |
+| 4K 10-bit → H.264 8-bit | 29.3 s · 56.7 MB · 44.6 dB · 285 s CPU | 12.8 s · 71.6 MB · 46.2 dB · 91 s CPU | 2.3x |
+| 1080p → 720p H.264 | 2.65 s · 5.1 MB | 1.85 s · 7.8 MB | 1.4x |
+
+H.265 gains the most because x265 is slow; NVENC matches its quality and size. For H.264,
+NVENC files are larger for the same quality. Decoding and scaling still run on the CPU,
+which is what limits the 4K and 720p exports.
+
 ---
 
 ## 8. Testing
 
 ```bash
-cargo test            # 72 tests; GPU tests skip themselves without a GPU
+cargo test            # 78 tests; GPU tests skip themselves without a GPU
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
@@ -503,7 +536,8 @@ enforcement. GitHub Actions runs format, lint and tests on every push
 |---|---|
 | Probe · decode · seek · cache · export · proxies · rotation | **Done and tested** |
 | GPU decode (NVDEC via CUDA, VA-API) | **Done and tested** on an NVIDIA RTX 3050 Laptop and Intel VA-API (iHD). Off by default. |
-| GPU encode (NVENC, VA-API, Quick Sync) | **Not yet.** |
+| GPU encode, NVENC for the H.264 and H.265 presets | **Done and tested** on an NVIDIA RTX 3050 Laptop. Off by default. |
+| GPU encode with VA-API / Quick Sync, other codecs | **Not yet.** |
 | Zero-copy hand-off to wgpu | **Not yet.** Needs the Render Engine. |
 | Cinema RAW (RED, ARRI, Blackmagic) | **Not in the engine.** Planned as optional plugins. |
 | Project interchange (EDL, OTIO, FCPXML, AAF) | **Not started.** Needs the Timeline Engine. |

@@ -10,11 +10,11 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
 
 ## Next, in order
 
-1. **GPU encode.** GPU *decode* is done (CUDA/NVDEC and VA-API, tested on an
-   RTX 3050 Laptop and Intel iHD; see `DecodeOptions`). Next is NVENC for the
-   H.264/H.265 presets, then VA-API / QSV. AMD and Apple can be written but
-   nobody here can test them; mark them untested and let contributors with
-   that hardware verify.
+1. **More GPU encoders.** GPU decode (CUDA/NVDEC, VA-API) and NVENC encoding
+   for the H.264/H.265 presets are done and tested on an RTX 3050 Laptop. Next:
+   NVENC AV1 (RTX 40 and newer), VA-API / QSV encoding, and decoding on the GPU
+   during export. AMD and Apple can be written but nobody here can test them;
+   mark them untested and let contributors with that hardware verify.
 2. **Zero-copy hand-off to wgpu.** Only meaningful once the Render Engine can
    receive GPU frames. Today decoded frames are RGBA in system memory.
 3. **Project interchange**, once the Timeline Engine exists: EDL, then
@@ -36,7 +36,7 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
 * **Long GIFs** (over 20 s) use a palette per frame to keep memory flat, so
   colours can flicker slightly.
 * **Trimming** works on export (start/end). Cutting and joining clips is the Timeline Engine's job.
-* **Hardware encoders are not used**, so exports are CPU-bound. On the 2-core
+* **Hardware encoding is NVENC only** (H.264/H.265, opt-in), so other exports are CPU-bound. On the 2-core
   cloud machine this was built on, 1080p to 720p H.264 at the Standard preset
   ran at roughly 2x real time; decode with RGBA conversion ran at ~270 fps.
 

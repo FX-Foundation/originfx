@@ -27,7 +27,7 @@ export("clip.mp4", "clip-720p.mp4",
 | Software export, 19 presets, scale, fps conform, progress, cancel | done, all 19 tested here |
 | Proxy workflow (content-addressed, atomic, prune) | done, tested |
 | GPU decode (CUDA/NVDEC, VA-API) | done, tested on real hardware; off by default (`DecodeOptions`) |
-| GPU encode | **not done** |
+| GPU encode (NVENC, H.264/H.265 presets) | done, tested on real hardware; off by default (`ExportSettings::hw_encode`) |
 | Zero-copy hand-off to wgpu | **not done**: needs the Render Engine and a GPU |
 | Cinema RAW | **out of scope for the engine**: future plugin, see `docs/ROADMAP.md` |
 | Project interchange (EDL/OTIO/FCPXML/AAF) | **not started** (needs the Timeline Engine) |

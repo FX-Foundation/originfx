@@ -251,3 +251,23 @@ pub fn frame_id(reference: &[media_engine::VideoFrame], frame: &media_engine::Vi
         .position(|r| r.data == frame.data)
         .map_or(-1, |i| i as i64)
 }
+
+/// True when NVENC can be used here: a CUDA device opens and FFmpeg has `h264_nvenc`.
+pub fn nvenc_available() -> bool {
+    gpu_apis().contains(&media_engine::HwApi::Cuda)
+        && media_engine::hwaccel::hardware_codecs()
+            .iter()
+            .any(|c| c == "h264_nvenc")
+}
+
+/// Skip the current test unless `ffmpeg` is installed and NVENC can be used.
+#[macro_export]
+macro_rules! require_nvenc {
+    () => {
+        $crate::require_ffmpeg!();
+        if !$crate::common::nvenc_available() {
+            eprintln!("skipping: NVENC (CUDA) is not available on this machine");
+            return;
+        }
+    };
+}
