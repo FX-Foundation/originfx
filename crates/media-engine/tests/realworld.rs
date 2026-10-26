@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Footage that looks more like the real world: surround sound, several audio
 //! tracks, 10-bit and HDR video.
 

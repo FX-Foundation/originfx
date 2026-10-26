@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Colour handling: which YUV matrix a clip uses, and how to tag exports.
 //!
 //! Video is stored as YUV, and the numbers only mean something together with

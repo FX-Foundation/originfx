@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Exact frame timeline for variable-frame-rate footage.
 //!
 //! Phone clips and screen recordings often have frames at uneven intervals.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Video and audio decoding with frame-accurate seeking.
 //!
 //! Video decodes in software by default; [`DecodeOptions`] can move it to the

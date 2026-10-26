@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Software transcoding: read any supported file, write it out with an
 //! [`ExportPreset`].
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Proxy workflow: small, fast-to-scrub copies of heavy source files.
 //!
 //! Editing 4K H.265 directly is slow. A proxy is a low-resolution H.264 copy

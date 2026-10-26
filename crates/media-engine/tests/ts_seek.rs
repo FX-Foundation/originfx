@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Seeking in MPEG-TS clips that use B-frames.
 
 mod common;

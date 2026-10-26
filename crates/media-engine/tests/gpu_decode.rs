@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! GPU decoding (CUDA / VA-API). Every test skips itself when no GPU can be
 //! opened, so these pass trivially on CI. On a machine with a GPU they check
 //! that GPU frames are byte-identical to software frames, in order, after

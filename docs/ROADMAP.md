@@ -45,12 +45,14 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
   cloud machine this was built on, 1080p to 720p H.264 at the Standard preset
   ran at roughly 2x real time; decode with RGBA conversion ran at ~270 fps.
 
-## Licensing: needs a decision before the first release
+## Licensing
 
-* The repository has **no LICENSE file yet** and the crates are marked
-  `publish = false` so nothing asserts a licence on your behalf.
-* FFmpeg builds that include **libx264 / libx265 are GPL**. Shipping a binary
-  that links such a build generally makes the whole binary GPL-compatible-only.
-  Options: release OriginFX under GPL-3.0 (fits an open-source mission), or link
-  an LGPL-only FFmpeg and ship x264/x265 support separately. This is a real
-  legal question; check with someone qualified before releasing binaries.
+* OriginFX is **GPL-3.0-or-later** (`LICENSE`, `THIRD_PARTY.md`, an SPDX header on
+  every source file, `license` in `Cargo.toml`). Decided because FFmpeg builds that
+  include libx264 / libx265 are GPL, so a shipped binary must be GPL anyway.
+* No contributor agreement (CLA) is used: contributors keep their copyright and
+  license under the same GPL. Relicensing to closed source later would need every
+  contributor's consent, which is the price of that choice.
+* The crates stay `publish = false` until a first release is cut.
+* H.264/H.265 patent pools are a separate matter from copyright; get advice before
+  shipping a commercial binary. This is not legal advice.

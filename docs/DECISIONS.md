@@ -12,7 +12,7 @@ reversed; none touched your existing files.
 | 5 | Export is always constant frame rate | What editors and delivery formats expect | Remove the `fps` filter |
 | 6 | Cinema RAW removed from engine scope | Your call: future plugin | See ROADMAP |
 | 7 | The 19 export presets are my own list | Your notes say "19 export formats" but not which; this covers the common web, editing, and audio formats | Edit `preset.rs` (one table) |
-| 8 | No licence declared (`publish = false`) | Choosing a licence is yours, and FFmpeg+x264 affects it | Add LICENSE, remove `publish = false` |
+| 8 | Licence: GPL-3.0-or-later, no CLA; crates stay `publish = false` until a release | Chosen by you. FFmpeg builds with x264/x265 are GPL, so a GPL app is the simple, honest fit. "or later" is the FSF's usual recommendation. Not publishing to crates.io yet avoids an accidental release | `LICENSE`, `Cargo.toml` |
 | 9 | Hardware acceleration is probe-only (superseded: GPU decode added once a GPU was available, see 12-15) | No GPU in the build environment; untested GPU code is worse than none | See ROADMAP |
 | 10 | Did not touch the root `README.md`, `CONTRIBUTING.md` or `CODE_OF_CONDUCT.md` | They are your voice | n/a |
 | 11 | A stray test branch `claude/push-test` exists on GitHub (one empty commit) | I could not delete it from here | Delete it in GitHub's Branches page |

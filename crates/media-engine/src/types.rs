@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Plain data types that cross the Media Engine boundary.
 //!
 //! None of these types expose FFmpeg, so the rest of OriginFX never has to

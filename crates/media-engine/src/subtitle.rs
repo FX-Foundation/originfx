@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Subtitle text and chapter helpers.
 //!
 //! Text subtitles (SRT, ASS/SSA, WebVTT, mov_text and friends) are read as plain

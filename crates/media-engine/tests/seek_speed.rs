@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Seeking in long-GOP footage with B-frames: fast, and always the right frame.
 
 mod common;

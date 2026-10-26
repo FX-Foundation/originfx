@@ -635,7 +635,7 @@ Known limits, stated plainly:
 - **Long GIFs** use one palette per frame instead of one shared palette (over 20 seconds), so colours can flicker slightly. That keeps memory flat.
 - **Trimming** is supported on export (a start and end time). Cutting and joining several clips is the Timeline Engine's job.
 
-Full detail and the licensing note (FFmpeg's x264/x265 are GPL) are in
+Licence: GPL-3.0-or-later (see `LICENSE` and `THIRD_PARTY.md`; FFmpeg's x264/x265 are GPL). Full detail is in
 [`ROADMAP.md`](ROADMAP.md); every default chosen while building it is in
 [`DECISIONS.md`](DECISIONS.md).
 

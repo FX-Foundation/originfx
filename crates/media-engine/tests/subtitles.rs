@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Text subtitles and chapters: reading them and carrying them through export.
 
 mod common;
