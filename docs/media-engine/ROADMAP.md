@@ -12,14 +12,15 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
 
 ## Next, in order
 
-1. **More GPU encoders.** GPU decode (CUDA/NVDEC, VA-API) and NVENC encoding
+1. **Wider import testing.** Generate a clip for each less common container and codec (AVI, MXF, FLV, MPG, M2TS, 3GP, OGV; MPEG-2, MPEG-4, DNxHD, DV; 4:2:2 and 4:4:4) and check probe, decode and seek on each. Today only the common set is tested.
+2. **More GPU encoders.** GPU decode (CUDA/NVDEC, VA-API) and NVENC encoding
    for the H.264/H.265 presets are done and tested on an RTX 3050 Laptop. Next:
    NVENC AV1 (RTX 40 and newer), VA-API / QSV encoding, and decoding on the GPU
    during export. AMD and Apple can be written but nobody here can test them;
    mark them untested and let contributors with that hardware verify.
-2. **Zero-copy hand-off to wgpu.** Only meaningful once the Render Engine can
+3. **Zero-copy hand-off to wgpu.** Only meaningful once the Render Engine can
    receive GPU frames. Today decoded frames are RGBA in system memory.
-3. **Project interchange**, once the Timeline Engine exists: EDL, then
+4. **Project interchange**, once the Timeline Engine exists: EDL, then
    OpenTimelineIO, then FCPXML, then AAF last.
 
 ## Known limitations (honest list)
