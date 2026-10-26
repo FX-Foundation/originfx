@@ -49,6 +49,35 @@ flowchart LR
     HW[hwaccel<br/><i>GPU decode</i>] -.-> D
 ```
 
+### What it can open
+
+Everything goes through FFmpeg, so the engine opens whatever the installed FFmpeg can read. On
+the reference build (Ubuntu 24.04, FFmpeg 6.1.1) that is:
+
+| | Count |
+|---|---|
+| Container formats it can read | **368** |
+| Decoders in total | **537** (299 video, 214 audio, 24 subtitle) |
+
+That is the "400+ import formats" the project aims for, counted as formats and codecs together.
+The exact numbers depend on how your FFmpeg was built; `ffmpeg -demuxers` and `ffmpeg -decoders`
+list yours.
+
+What has actually been **tested** is a much smaller set, and it is worth knowing the difference:
+
+| Tested | What |
+|---|---|
+| Containers | MP4, MKV, WebM, MOV, MPEG-TS, GIF, WAV, MP3 |
+| Video codecs | H.264, H.265, VP8, VP9, AV1, ProRes, DNxHR, MJPEG, GIF (each decoded back from our own exports) |
+| Audio codecs | AAC, MP3, Opus, FLAC, WAV (PCM) |
+| Subtitles | SRT, ASS/SSA and mov_text, as text only (WebVTT is accepted by the code but has no test yet) |
+
+Everything else (AVI, MXF, FLV, WMV, MPG/VOB, M2TS, 3GP, OGV, camera formats such as XAVC and
+AVCHD, 4:2:2 and 4:4:4 camera footage) is expected to open because FFmpeg can read it, but has
+not been checked frame by frame here. If a file does not behave, `originfx probe` and
+`originfx hw` print what to paste into a bug report. Cinema RAW (RED, ARRI, Blackmagic RAW) is not
+readable by FFmpeg and is a future plugin, see the [roadmap](ROADMAP.md).
+
 **Design rules**
 
 - **It is a library, not an app.** No windows, no buttons. Other engines call it; the CLI is only a thin front-end for trying it out.
@@ -622,6 +651,7 @@ enforcement. GitHub Actions runs format, lint and tests on every push
 | Area | Status |
 |---|---|
 | Probe · decode · seek · cache · export · proxies · rotation | **Done and tested** |
+| Import: 368 container formats, 537 decoders (FFmpeg 6.1.1) | **Open to all of them; tested on the common set** listed in [What it can open](#what-it-can-open). A wider import test is still to do. |
 | GPU decode (NVDEC via CUDA, VA-API) | **Done and tested** on an NVIDIA RTX 3050 Laptop and Intel VA-API (iHD). Off by default. |
 | GPU encode, NVENC for the H.264 and H.265 presets | **Done and tested** on an NVIDIA RTX 3050 Laptop. Off by default. |
 | GPU encode with VA-API / Quick Sync, other codecs | **Not yet.** |
