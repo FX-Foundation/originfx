@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Probe a file, grab a frame, and export a 720p copy.
 //!
 //!     cargo run --release -p originfx-media-engine --example quickstart -- clip.mp4

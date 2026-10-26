@@ -2,7 +2,7 @@
 
 > A professional, cross-platform video editor. Built in Rust. Built by the community.
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL%203.0-blue.svg)](LICENSE)
 [![Foundation](https://img.shields.io/badge/backed%20by-FX%20Foundation-gold.svg)](https://github.com/FX-Foundation)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 
@@ -73,7 +73,7 @@ See [GOVERNANCE.md](https://github.com/FX-Foundation/governance) for full detail
 
 ## License
 
-OriginFX is licensed under the [Apache License 2.0](LICENSE).
+OriginFX is licensed under the [GNU General Public License v3.0 or later](LICENSE). Third-party components are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ---
 

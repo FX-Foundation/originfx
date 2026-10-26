@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Export presets: which container, codecs and defaults each output format uses.
 
 use ffmpeg_next as ffmpeg;

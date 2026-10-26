@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! GPU encoding (NVENC) for the H.264 and H.265 export presets, and the
 //! fallback to software. Tests that need NVENC skip themselves without it; the
 //! fallback tests run everywhere.

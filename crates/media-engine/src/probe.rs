@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Read container and stream metadata without decoding any frames.
 
 use std::path::Path;

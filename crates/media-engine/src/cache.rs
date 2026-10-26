@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Byte-budgeted LRU cache of decoded frames and a cached random-access reader.
 
 use std::path::Path;

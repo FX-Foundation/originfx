@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Minimal PNG writer (uncompressed), so the CLI can save frames without extra dependencies.
 
 use std::io::{self, Write};

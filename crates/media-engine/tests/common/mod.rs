@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Test helpers: generate small clips with the `ffmpeg` command line tool.
 //!
 //! Tests skip themselves (with a message) when `ffmpeg` is not installed, so

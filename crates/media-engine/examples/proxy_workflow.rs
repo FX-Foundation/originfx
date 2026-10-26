@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Proxy workflow: edit against a small copy, export from the original.
 //!
 //!     cargo run --release -p originfx-media-engine --example proxy_workflow -- big-clip.mp4

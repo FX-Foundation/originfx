@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `originfx`: command line front-end for the OriginFX engines.
 
 mod png;

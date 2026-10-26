@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! # OriginFX Media Engine
 //!
 //! The first of OriginFX's ten engines. It owns everything that touches a
