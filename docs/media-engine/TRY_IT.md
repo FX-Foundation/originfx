@@ -1,4 +1,6 @@
-# Checklist (nothing here is urgent)
+# Try the Media Engine on your own machine
+
+Nothing here is urgent. Full guide: [README.md](README.md).
 
 ## Try it on your own machine (about 10 minutes)
 
@@ -31,8 +33,3 @@ generated MKV and MP4 files. A few real files would be a good check:
 
 If anything misbehaves, `originfx hw` and `originfx bench <file>` print what to paste into
 a bug report.
-
-## Housekeeping
-
-* Delete merged feature branches in GitHub's Branches page (each merged pull request also
-  has a "Delete branch" button).

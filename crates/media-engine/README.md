@@ -30,7 +30,7 @@ export("clip.mp4", "clip-720p.mp4",
 | GPU decode (CUDA/NVDEC, VA-API) | done, tested on real hardware; off by default (`DecodeOptions`) |
 | GPU encode (NVENC, H.264/H.265 presets) | done, tested on real hardware; off by default (`ExportSettings::hw_encode`) |
 | Zero-copy hand-off to wgpu | **not done**: needs the Render Engine and a GPU |
-| Cinema RAW | **out of scope for the engine**: future plugin, see `docs/ROADMAP.md` |
+| Cinema RAW | **out of scope for the engine**: future plugin, see [`docs/media-engine/ROADMAP.md`](../../docs/media-engine/ROADMAP.md) |
 | Project interchange (EDL/OTIO/FCPXML/AAF) | **not started** (needs the Timeline Engine) |
 
 ## Layout
@@ -58,7 +58,7 @@ cargo test -p originfx-media-engine
 ```
 
 For the full guide (command line, library, presets, internals, performance) see
-[`docs/MEDIA_ENGINE.md`](../../docs/MEDIA_ENGINE.md). The code is GPL-3.0-or-later.
+[`docs/media-engine/README.md`](../../docs/media-engine/README.md). The code is GPL-3.0-or-later.
 
 Tests build their own clips with the `ffmpeg` command line tool (no binary
 fixtures in the repo) and skip themselves if it is missing. The key fixture is a

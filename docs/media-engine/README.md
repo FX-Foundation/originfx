@@ -190,7 +190,7 @@ originfx-media-engine = { path = "../media-engine" }
 ```
 
 Two complete, compiled programs live in
-[`crates/media-engine/examples/`](../crates/media-engine/examples):
+[`crates/media-engine/examples/`](../../crates/media-engine/examples):
 `quickstart.rs` and `proxy_workflow.rs`. Run one with:
 
 ```bash
@@ -639,9 +639,9 @@ Known limits, stated plainly:
 - **Long GIFs** use one palette per frame instead of one shared palette (over 20 seconds), so colours can flicker slightly. That keeps memory flat.
 - **Trimming** is supported on export (a start and end time). Cutting and joining several clips is the Timeline Engine's job.
 
-Licence: GPL-3.0-or-later (see `LICENSE` and `THIRD_PARTY.md`; FFmpeg's x264/x265 are GPL). Full detail is in
-[`ROADMAP.md`](ROADMAP.md); every default chosen while building it is in
-[`DECISIONS.md`](DECISIONS.md).
+Licence: GPL-3.0-or-later (see [`LICENSE`](../../LICENSE) and [`THIRD_PARTY.md`](../../THIRD_PARTY.md); FFmpeg's x264/x265 are GPL). Licensing detail is in
+[`LICENSING.md`](../LICENSING.md). What comes next and the known limits are in [`ROADMAP.md`](ROADMAP.md); every default chosen while
+building this engine is in [`DECISIONS.md`](DECISIONS.md). Want to try it on real footage? See [`TRY_IT.md`](TRY_IT.md).
 
 ---
 

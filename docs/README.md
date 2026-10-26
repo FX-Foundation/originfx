@@ -1,10 +1,26 @@
 # OriginFX docs
 
+## The whole project
+
 | Document | What it is |
 |---|---|
-| [MEDIA_ENGINE.md](MEDIA_ENGINE.md) | Full guide to the Media Engine: install, CLI, library, presets, internals |
-| [ROADMAP.md](ROADMAP.md) | What's next, known limits, licensing |
-| [DECISIONS.md](DECISIONS.md) | Defaults chosen while building, and how to reverse each |
-| [ARRANGE.md](ARRANGE.md) | Checklist: trying it on your own machine and housekeeping before a first release |
+| [ROADMAP.md](ROADMAP.md) | The ten engines, in build order, and where each one stands |
+| [LICENSING.md](LICENSING.md) | GPL-3.0-or-later, why, and what it means for contributors |
+| [DECISIONS.md](DECISIONS.md) | Decisions that apply to every engine, and how to reverse each |
 | [../THIRD_PARTY.md](../THIRD_PARTY.md) | Third-party software and licences (FFmpeg, codecs, Rust crates) |
 | [../LICENSE](../LICENSE) | GPL-3.0 |
+
+## Engines
+
+Each engine has its own folder with the same set of pages.
+
+### Media Engine (done)
+
+| Document | What it is |
+|---|---|
+| [README.md](media-engine/README.md) | Full guide: install, command line, library, presets, internals |
+| [ROADMAP.md](media-engine/ROADMAP.md) | What is next and the known limits |
+| [DECISIONS.md](media-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
+| [TRY_IT.md](media-engine/TRY_IT.md) | Checklist for trying it on your own machine and real footage |
+
+The other engines get their own folders as they are built.

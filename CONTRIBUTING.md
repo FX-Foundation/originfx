@@ -38,7 +38,7 @@ Open a Discussion first. Large features should go through the [RFC process](http
 ### Building and testing
 
 You need Rust (stable) and the FFmpeg 6.1 development libraries (Ubuntu 24.04 ships them).
-The install line is in the [Media Engine quick start](docs/MEDIA_ENGINE.md#2-quick-start).
+The install line is in the [Media Engine quick start](docs/media-engine/README.md#2-quick-start).
 The tests also use the `ffmpeg` command-line tool to generate their own clips; no video
 files are stored in the repository.
 
@@ -50,7 +50,7 @@ cargo test --workspace
 
 ### Writing Documentation
 
-Documentation lives alongside the code, mostly in [`docs/`](docs). Clear docs are as valuable
+Documentation lives alongside the code, in [`docs/`](docs), with one folder per engine. Clear docs are as valuable
 as good code. If you change what the software does, update the page that describes it in
 the same pull request.
 
