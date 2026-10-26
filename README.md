@@ -39,14 +39,26 @@ exactly, caches frames, writes 19 export formats, makes proxies, carries subtitl
 chapters, and can use the GPU (NVIDIA CUDA and NVENC, VA-API) when asked. Software output
 is the default and GPU use is always opt-in.
 
-- [x] Project structure and workspace layout
-- [x] Media import/decode layer (FFmpeg integration): the [Media Engine](docs/MEDIA_ENGINE.md)
-- [ ] Core timeline data model
-- [ ] Renderer pipeline (GPU-accelerated)
-- [ ] Plugin/extension system
-- [ ] UI framework selection
+### Engines
 
-**Try it** (Ubuntu 24.04; full steps in [docs/MEDIA_ENGINE.md](docs/MEDIA_ENGINE.md#2-quick-start)):
+OriginFX is built as ten engines, one at a time, in this order. Each has its own crate and its own docs folder.
+
+| # | Engine | Status | Docs |
+|---|--------|--------|------|
+| 1 | Media | **Done and tested** | [Guide](docs/media-engine/README.md) |
+| 2 | Timeline | Planned | n/a |
+| 3 | Render | Planned | n/a |
+| 4 | Video Editing | Planned | n/a |
+| 5 | Audio | Planned | n/a |
+| 6 | Keyframe | Planned | n/a |
+| 7 | Effects | Planned | n/a |
+| 8 | Compositing | Planned | n/a |
+| 9 | Motion Graphics | Planned | n/a |
+| 10 | Plugin | Planned | n/a |
+
+The full roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+**Try it** (Ubuntu 24.04; full steps in [docs/media-engine](docs/media-engine/README.md#2-quick-start)):
 
 ```bash
 git clone https://github.com/FX-Foundation/originfx && cd originfx
