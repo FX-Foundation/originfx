@@ -29,5 +29,4 @@ spin). Skip it if you want the machine cool; nothing depends on it.
 ## Decisions only you can make
 
 * Delete the leftover `claude/push-test` branch on GitHub.
-* Confirm or change the **19 export presets** list (`DECISIONS.md` #7).
 * Review and merge `claude/media-engine` into `main`.
