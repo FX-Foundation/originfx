@@ -1,9 +1,9 @@
-# Your checklist (nothing here is urgent)
+# Checklist (nothing here is urgent)
 
-## Try it on your laptop (about 10 minutes)
+## Try it on your own machine (about 10 minutes)
 
 ```bash
-git fetch origin claude/media-engine && git checkout claude/media-engine
+git clone https://github.com/FX-Foundation/originfx && cd originfx
 sudo apt install ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
   libswresample-dev libavfilter-dev libavdevice-dev libx264-dev libx265-dev \
   clang libclang-dev pkg-config
@@ -14,19 +14,25 @@ cargo build --release
 cargo test
 ```
 
-The release build is the slow part (a few minutes, and the laptop fan will
-spin). Skip it if you want the machine cool; nothing depends on it.
+The release build is the slow part (a few minutes, and the fan will spin). Skip it if you
+want the machine cool; nothing depends on it.
 
-## Send me these when you feel like it (this unlocks the GPU work)
+## Worth trying with real footage
 
-1. Output of `./target/release/originfx hw` (tells me what your RTX 4060 and
-   Intel graphics expose on Ubuntu).
-2. Output of `./target/release/originfx bench ~/Videos/some-clip.mp4` for one
-   phone clip and, if you have one, one big 4K or HEVC clip.
-3. One or two real clips from your Samsung phone (portrait ones especially;
-   rotation handling is tested only on generated files).
+Rotation handling is tested only on generated clips, and subtitle and chapter handling on
+generated MKV and MP4 files. A few real files would be a good check:
 
-## Decisions only you can make
+1. A portrait clip from a phone: `originfx probe` should report a rotation, and `frame`
+   should save an upright picture.
+2. A film or episode with subtitles and chapters:
+   `originfx convert in.mkv out.mkv --subtitles --chapters`, then open `out.mkv` in a player.
+3. If you have an NVIDIA GPU: `originfx convert in.mov out.mp4 --hw auto`, which prints the
+   encoder used.
 
-* Delete the leftover `claude/push-test` branch on GitHub.
-* Review and merge `claude/media-engine` into `main`.
+If anything misbehaves, `originfx hw` and `originfx bench <file>` print what to paste into
+a bug report.
+
+## Housekeeping
+
+* Delete merged feature branches in GitHub's Branches page (each merged pull request also
+  has a "Delete branch" button).

@@ -37,10 +37,13 @@ export("clip.mp4", "clip-720p.mp4",
 
 | Module | Purpose |
 |--------|---------|
-| `probe` | metadata without decoding |
-| `decode` | `VideoDecoder`, `AudioDecoder` |
+| `probe` | metadata, chapters and subtitle tracks without decoding |
+| `decode` | `VideoDecoder`, `AudioDecoder`, seeking, GPU decode |
 | `cache` | `FrameCache`, `FrameReader` |
-| `preset`, `transcode` | `ExportPreset`, `ExportSettings`, `export` |
+| `index` | `FrameIndex`: exact frame times for variable-frame-rate footage |
+| `colour` | YUV matrix, range and HDR tags |
+| `subtitle` | `read_subtitles`: plain timed text from text subtitle tracks |
+| `preset`, `transcode` | `ExportPreset`, `ExportSettings`, `export` (incl. subtitles, chapters, NVENC) |
 | `proxy` | `ProxyManager` |
 | `hwaccel` | GPU API discovery, GPU decode setup (`HwApi`, `HwPolicy`) |
 | `types`, `error` | plain data types and the error enum |
@@ -53,6 +56,9 @@ sudo apt install ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-
   clang libclang-dev pkg-config
 cargo test -p originfx-media-engine
 ```
+
+For the full guide (command line, library, presets, internals, performance) see
+[`docs/MEDIA_ENGINE.md`](../../docs/MEDIA_ENGINE.md). The code is GPL-3.0-or-later.
 
 Tests build their own clips with the `ffmpeg` command line tool (no binary
 fixtures in the repo) and skip themselves if it is missing. The key fixture is a
