@@ -32,7 +32,12 @@ users convert RAW to ProRes or DNxHR first, which is what many pros do anyway.
   Export still conforms to constant frame rate.
 * **Audio:** surround is kept up to 8 channels (MP3 mixes down to stereo), one
   track is exported at a time, and mixing several tracks is the Audio Engine's job.
-* **No subtitle or chapter handling** beyond listing subtitle streams in probe.
+* **Subtitles are text only.** SRT, ASS/SSA, WebVTT and mov_text can be read and
+  carried into MKV and MP4/MOV exports (with chapters); styling and positioning are
+  dropped, picture subtitles (PGS, DVD, DVB) are skipped, and WebM and AVI outputs
+  cannot hold them. Burning subtitles into the picture belongs in the Render Engine.
+* **VA-API cannot decode 4K AV1 on the Intel iGPU it was tested on.** `Auto` falls back
+  to software and reports why. Untested on other GPUs.
 * **Long GIFs** (over 20 s) use a palette per frame to keep memory flat, so
   colours can flicker slightly.
 * **Trimming** works on export (start/end). Cutting and joining clips is the Timeline Engine's job.

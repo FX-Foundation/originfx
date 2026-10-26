@@ -70,6 +70,19 @@ enum Command {
         /// software) or cuda (NVENC or an error). vaapi is not supported yet.
         #[arg(long, value_enum, default_value = "off")]
         hw: HwArg,
+        /// Copy text subtitle tracks into the output (MKV and MP4/MOV).
+        #[arg(long)]
+        subtitles: bool,
+        /// Copy chapter markers into the output (MKV, MP4, MOV, M4A).
+        #[arg(long)]
+        chapters: bool,
+    },
+    /// Print a text subtitle track as SRT.
+    Subtitles {
+        file: PathBuf,
+        /// Subtitle stream index from `probe`; the first subtitle track if omitted.
+        #[arg(long)]
+        stream: Option<usize>,
     },
     /// List export presets and whether this machine's FFmpeg can produce them.
     Presets,
@@ -105,6 +118,12 @@ enum Command {
         /// Also test random access: seek this many times.
         #[arg(long, default_value_t = 20)]
         seeks: u32,
+        /// Also test scrubbing backwards: step back one frame at a time this many times.
+        #[arg(long, default_value_t = 0)]
+        scrub: u32,
+        /// Frame cache size for the random access and scrub tests, in MB.
+        #[arg(long, default_value_t = 64)]
+        cache_mb: usize,
         /// GPU decoding: off, auto (try CUDA then VA-API, else software), cuda or vaapi.
         #[arg(long, value_enum, default_value = "off")]
         hw: HwArg,
@@ -199,6 +218,8 @@ fn run(cmd: Command) -> CliResult {
             video_stream,
             audio_stream,
             hw,
+            subtitles,
+            chapters,
         } => {
             let preset = match preset {
                 Some(id) => ExportPreset::from_id(&id)
@@ -215,6 +236,8 @@ fn run(cmd: Command) -> CliResult {
             s.video_stream = video_stream;
             s.audio_stream = audio_stream;
             s.hw_encode = hw.into();
+            s.subtitles = subtitles;
+            s.chapters = chapters;
 
             let tty = std::io::stderr().is_terminal();
             let report = media_engine::export_with_progress(&input, &output, &s, |p| {
@@ -250,6 +273,38 @@ fn run(cmd: Command) -> CliResult {
                     Some(why) => println!("video encoder: {enc} (GPU not used: {why})"),
                     None => println!("video encoder: {enc}"),
                 }
+            }
+            if report.subtitle_tracks > 0 {
+                println!("subtitle tracks: {}", report.subtitle_tracks);
+            }
+            if report.chapters > 0 {
+                println!("chapters: {}", report.chapters);
+            }
+            for note in &report.notes {
+                println!("note: {note}");
+            }
+        }
+        Command::Subtitles { file, stream } => {
+            let info = media_engine::probe(&file)?;
+            let index = match stream {
+                Some(i) => i,
+                None => info
+                    .subtitles
+                    .first()
+                    .map(|s| s.index)
+                    .ok_or("this file has no subtitle tracks")?,
+            };
+            for (n, cue) in media_engine::read_subtitles(&file, index)?
+                .iter()
+                .enumerate()
+            {
+                println!(
+                    "{}\n{} --> {}\n{}\n",
+                    n + 1,
+                    srt_time(cue.start_secs),
+                    srt_time(cue.end_secs),
+                    cue.text
+                );
             }
         }
         Command::Presets => {
@@ -299,8 +354,10 @@ fn run(cmd: Command) -> CliResult {
             file,
             frames,
             seeks,
+            scrub,
+            cache_mb,
             hw,
-        } => bench(&file, frames, seeks, hw.into())?,
+        } => bench(&file, frames, seeks, scrub, cache_mb, hw.into())?,
     }
     Ok(())
 }
@@ -418,15 +475,54 @@ fn print_info(info: &MediaInfo) {
         );
     }
     for s in &info.subtitles {
+        let mut tags = Vec::new();
+        if let Some(l) = &s.language {
+            tags.push(l.clone());
+        }
+        if let Some(t) = &s.title {
+            tags.push(format!("\"{t}\""));
+        }
+        if s.default {
+            tags.push("default".into());
+        }
+        if s.forced {
+            tags.push("forced".into());
+        }
+        if !s.text_based {
+            tags.push("picture".into());
+        }
         println!(
             "  subs  #{:<2} : {}{}",
             s.index,
             s.codec,
-            s.language
-                .as_deref()
-                .map_or(String::new(), |l| format!(", {l}"))
+            if tags.is_empty() {
+                String::new()
+            } else {
+                format!(", {}", tags.join(", "))
+            }
         );
     }
+    for (n, c) in info.chapters.iter().enumerate() {
+        println!(
+            "  chapter {:<2} : {:>9.3}s - {:>9.3}s  {}",
+            n + 1,
+            c.start_secs,
+            c.end_secs,
+            c.title.as_deref().unwrap_or("")
+        );
+    }
+}
+
+/// `1.5` -> `00:00:01,500`.
+fn srt_time(secs: f64) -> String {
+    let ms = (secs.max(0.0) * 1000.0).round() as u64;
+    format!(
+        "{:02}:{:02}:{:02},{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    )
 }
 
 fn json_str(s: &str) -> String {
@@ -492,10 +588,26 @@ fn info_json(i: &MediaInfo) -> String {
         .iter()
         .map(|s| {
             format!(
-                "{{\"index\":{},\"codec\":{},\"language\":{}}}",
+                "{{\"index\":{},\"codec\":{},\"language\":{},\"title\":{},\"text_based\":{},\"default\":{},\"forced\":{}}}",
                 s.index,
                 json_str(&s.codec),
-                s.language.as_deref().map_or("null".to_string(), json_str)
+                s.language.as_deref().map_or("null".to_string(), json_str),
+                s.title.as_deref().map_or("null".to_string(), json_str),
+                s.text_based,
+                s.default,
+                s.forced
+            )
+        })
+        .collect();
+    let chapters: Vec<String> = i
+        .chapters
+        .iter()
+        .map(|c| {
+            format!(
+                "{{\"start_secs\":{},\"end_secs\":{},\"title\":{}}}",
+                c.start_secs,
+                c.end_secs,
+                c.title.as_deref().map_or("null".to_string(), json_str)
             )
         })
         .collect();
@@ -505,7 +617,7 @@ fn info_json(i: &MediaInfo) -> String {
         .map(|(k, v)| format!("{}:{}", json_str(k), json_str(v)))
         .collect();
     format!(
-        "{{\"path\":{},\"format\":{},\"format_long\":{},\"size_bytes\":{},\"duration_secs\":{},\"bit_rate\":{},\"video\":[{}],\"audio\":[{}],\"subtitles\":[{}],\"metadata\":{{{}}}}}",
+        "{{\"path\":{},\"format\":{},\"format_long\":{},\"size_bytes\":{},\"duration_secs\":{},\"bit_rate\":{},\"video\":[{}],\"audio\":[{}],\"subtitles\":[{}],\"chapters\":[{}],\"metadata\":{{{}}}}}",
         json_str(&i.path.to_string_lossy()),
         json_str(&i.format_name),
         json_str(&i.format_long_name),
@@ -515,6 +627,7 @@ fn info_json(i: &MediaInfo) -> String {
         video.join(","),
         audio.join(","),
         subs.join(","),
+        chapters.join(","),
         meta.join(",")
     )
 }
@@ -546,7 +659,14 @@ fn print_hw() {
     );
 }
 
-fn bench(file: &Path, max_frames: u64, seeks: u32, options: DecodeOptions) -> CliResult {
+fn bench(
+    file: &Path,
+    max_frames: u64,
+    seeks: u32,
+    scrub: u32,
+    cache_mb: usize,
+    options: DecodeOptions,
+) -> CliResult {
     let info = probe(file)?;
     let v = info.primary_video().ok_or(Error::NoStream("video"))?;
     println!("{}  {}x{} {}", file.display(), v.width, v.height, v.codec);
@@ -570,7 +690,7 @@ fn bench(file: &Path, max_frames: u64, seeks: u32, options: DecodeOptions) -> Cl
     if seeks > 0 {
         let dur = info.duration_secs.unwrap_or(0.0);
         if dur > 0.0 {
-            let mut reader = FrameReader::open_with(file, 64 * 1024 * 1024, options)?;
+            let mut reader = FrameReader::open_with(file, cache_mb * 1024 * 1024, options)?;
             let start = Instant::now();
             for i in 0..seeks {
                 let t = dur * (f64::from((i * 7919) % seeks) / f64::from(seeks));
@@ -581,6 +701,26 @@ fn bench(file: &Path, max_frames: u64, seeks: u32, options: DecodeOptions) -> Cl
                 "random access: {seeks} seeks in {secs:.2}s = {:.1} ms per frame  [decode: {}]",
                 secs * 1000.0 / f64::from(seeks),
                 backend_label(reader.decoder())
+            );
+        }
+    }
+
+    if scrub > 0 {
+        let dur = info.duration_secs.unwrap_or(0.0);
+        if dur > 0.0 {
+            let mut reader = FrameReader::open_with(file, cache_mb * 1024 * 1024, options)?;
+            let top = reader.index_at(dur / 2.0);
+            let steps = u64::from(scrub).min(top);
+            // Land on the starting frame first; only the steps back are timed.
+            reader.frame(top)?;
+            let start = Instant::now();
+            for k in 1..=steps {
+                reader.frame(top - k)?;
+            }
+            let secs = start.elapsed().as_secs_f64();
+            println!(
+                "scrub back: {steps} one-frame steps in {secs:.2}s = {:.1} ms per step  [cache {cache_mb} MB]",
+                secs * 1000.0 / steps.max(1) as f64
             );
         }
     }

@@ -133,6 +133,11 @@ pub(crate) fn rotate_rgba(data: Vec<u8>, w: u32, h: u32, degrees: u32) -> (Vec<u
     }
 }
 
+/// How far (seconds) before a seek target full decoding resumes. It has to cover the
+/// decoder's reordering, so the frame on screen at the target is never one that
+/// was skipped.
+const CATCH_UP_MARGIN_SECS: f64 = 1.0;
+
 /// How a [`VideoDecoder`] (or [`FrameReader`](crate::FrameReader)) decodes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct DecodeOptions {
@@ -197,6 +202,7 @@ struct Resume {
 /// frame-accurate: after it, the next frame returned is the one that is on
 /// screen at the requested time.
 pub struct VideoDecoder {
+    path: std::path::PathBuf,
     ictx: ffmpeg::format::context::Input,
     stream_index: usize,
     time_base: ffmpeg::Rational,
@@ -226,6 +232,11 @@ pub struct VideoDecoder {
     /// Pts of the last frame `decode_raw` produced since the last seek.
     last_raw_pts: Option<f64>,
     resume: Option<Resume>,
+    /// True once the file was reopened from its very beginning for this seek.
+    rewound: bool,
+    /// While fast-forwarding from the keyframe to a seek target, unreferenced
+    /// frames are skipped for packets before this time (software decoding only).
+    skip_until: Option<f64>,
     /// Frames downloaded from the GPU so far.
     gpu_frames: u64,
     /// Testing aid: pretend the GPU download fails after this many frames.
@@ -292,6 +303,7 @@ impl VideoDecoder {
         };
 
         Ok(Self {
+            path: path.to_path_buf(),
             ictx,
             stream_index: index,
             time_base,
@@ -305,6 +317,8 @@ impl VideoDecoder {
             target: None,
             seek_pos: 0.0,
             retry_step: 1.0,
+            skip_until: None,
+            rewound: false,
             options,
             gpu,
             hw_frames: gpu,
@@ -507,6 +521,7 @@ impl VideoDecoder {
                         if packet.stream() != self.stream_index {
                             continue;
                         }
+                        self.note_packet(&packet);
                         match self.decoder.send_packet(&packet) {
                             Ok(()) | Err(ffmpeg::Error::InvalidData) => {}
                             Err(e) if is_again(&e) => {}
@@ -610,6 +625,62 @@ impl VideoDecoder {
 
     /// The next frame as it left the decoder (in GPU memory when decoding on the GPU).
     fn next_raw(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
+        let result = self.next_raw_inner();
+        // Whatever happened, normal decoding resumes after the first frame.
+        self.stop_catching_up();
+        result
+    }
+
+    /// Software decoding only: while fast-forwarding from the keyframe to a seek
+    /// target, skip frames no other frame refers to (typically many B-frames). The
+    /// frames that matter are unchanged, so output is identical, only faster.
+    ///
+    /// The decision is made per packet, as it is handed to the decoder, because the
+    /// decoder reads ahead of the frames it outputs: by the time a frame near the
+    /// target comes out, the packets after it have already been decoded.
+    fn start_catching_up(&mut self, target: f64) {
+        if self.gpu.is_some() {
+            return;
+        }
+        self.skip_until = Some(target - CATCH_UP_MARGIN_SECS);
+        self.set_discard(ffmpeg::ffi::AVDiscard::AVDISCARD_NONREF);
+    }
+
+    fn stop_catching_up(&mut self) {
+        if self.skip_until.take().is_some() {
+            self.set_discard(ffmpeg::ffi::AVDiscard::AVDISCARD_DEFAULT);
+        }
+    }
+
+    /// Called before each packet is decoded: resume full decoding once the
+    /// packets get close to the seek target.
+    fn note_packet(&mut self, packet: &ffmpeg::Packet) {
+        let Some(limit) = self.skip_until else {
+            return;
+        };
+        let near = match packet.pts().or(packet.dts()) {
+            Some(p) => {
+                let tb = f64::from(self.time_base.numerator())
+                    / f64::from(self.time_base.denominator().max(1));
+                p as f64 * tb - self.origin_secs >= limit
+            }
+            None => true,
+        };
+        if near {
+            self.stop_catching_up();
+        }
+    }
+
+    fn set_discard(&mut self, mode: ffmpeg::ffi::AVDiscard) {
+        // SAFETY: `self.decoder` owns a valid, open codec context. `skip_frame` is a
+        // plain field FFmpeg documents as changeable while decoding; frame threads
+        // pick the new value up before the next frame they decode.
+        unsafe {
+            (*self.decoder.as_mut_ptr()).skip_frame = mode;
+        }
+    }
+
+    fn next_raw_inner(&mut self) -> Result<Option<ffmpeg::frame::Video>> {
         let Some(target) = self.target.take() else {
             return self.decode_raw();
         };
@@ -631,6 +702,11 @@ impl VideoDecoder {
                         self.reseek(back_to)?;
                         continue;
                     }
+                    if previous.is_none() && !self.rewound {
+                        // Not even a seek to time zero found anything: start over.
+                        self.rewind()?;
+                        continue;
+                    }
                     return Ok(previous);
                 }
                 Some(raw) => {
@@ -639,6 +715,14 @@ impl VideoDecoder {
                         let back_to = (self.seek_pos - self.retry_step).max(0.0);
                         self.retry_step *= 2.0;
                         self.reseek(back_to)?;
+                        continue;
+                    }
+                    if previous.is_none() && pts > target + 1e-6 && !self.rewound {
+                        // Seeking to time zero still lands after the target. This is
+                        // what MPEG-TS with B-frames does: no keyframe is listed at or
+                        // before the start, so the seek jumps to a later one. The
+                        // stream really begins at the start of the file.
+                        self.rewind()?;
                         continue;
                     }
                     if pts > target + 1e-6 {
@@ -656,6 +740,22 @@ impl VideoDecoder {
                 }
             }
         }
+    }
+
+    /// Start again from the very first packet of the file, whatever the seek index
+    /// says. Used when seeking to time zero cannot find the first frames.
+    fn rewind(&mut self) -> Result<()> {
+        self.ictx = open_input(&self.path)?;
+        self.decoder.flush();
+        self.eof_sent = false;
+        self.held = None;
+        self.seek_pos = 0.0;
+        self.last_raw_pts = None;
+        self.resume = None;
+        self.rewound = true;
+        // Everything from the start is needed up to the target, but skipping
+        // unreferenced frames is still safe and unchanged.
+        Ok(())
     }
 
     /// Low-level seek used by [`seek`](Self::seek) and its retry logic.
@@ -681,7 +781,9 @@ impl VideoDecoder {
         let secs = secs.max(0.0);
         self.reseek(secs)?;
         self.retry_step = 1.0;
+        self.rewound = false;
         self.target = Some(secs);
+        self.start_catching_up(secs);
         Ok(())
     }
 

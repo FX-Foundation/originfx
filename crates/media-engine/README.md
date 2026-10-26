@@ -26,6 +26,7 @@ export("clip.mp4", "clip-720p.mp4",
 | Phone portrait rotation (display matrix) | done, tested |
 | Software export, 19 presets, scale, fps conform, progress, cancel | done, all 19 tested here |
 | Proxy workflow (content-addressed, atomic, prune) | done, tested |
+| Subtitles and chapters (read; carry through MKV and MP4/MOV export) | done, tested; text only |
 | GPU decode (CUDA/NVDEC, VA-API) | done, tested on real hardware; off by default (`DecodeOptions`) |
 | GPU encode (NVENC, H.264/H.265 presets) | done, tested on real hardware; off by default (`ExportSettings::hw_encode`) |
 | Zero-copy hand-off to wgpu | **not done**: needs the Render Engine and a GPU |

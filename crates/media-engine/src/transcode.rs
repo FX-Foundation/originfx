@@ -53,6 +53,13 @@ pub struct ExportSettings {
     /// quietly runs in software when NVENC cannot be used, including when it fails
     /// part-way (the export then restarts in software, so progress starts again).
     pub hw_encode: HwPolicy,
+    /// Copy the source's text subtitle tracks into the output. Supported for MKV
+    /// (as SRT) and MP4/MOV (as mov_text); other formats skip them and say so in
+    /// [`ExportReport::notes`]. Text only: styling and positioning are dropped, and
+    /// picture subtitles (PGS, DVD) are skipped. Off by default.
+    pub subtitles: bool,
+    /// Copy chapter markers into the output (MKV, MP4, MOV, M4A). Off by default.
+    pub chapters: bool,
     /// Testing aid: make the GPU encoder fail after this many frames.
     #[doc(hidden)]
     pub simulate_gpu_failure_after: Option<u64>,
@@ -75,6 +82,8 @@ impl ExportSettings {
             video_stream: None,
             audio_stream: None,
             hw_encode: HwPolicy::Off,
+            subtitles: false,
+            chapters: false,
             simulate_gpu_failure_after: None,
         }
     }
@@ -126,6 +135,18 @@ impl ExportSettings {
     /// Encode video on the GPU (see [`ExportSettings::hw_encode`]).
     pub fn hw_encode(mut self, policy: HwPolicy) -> Self {
         self.hw_encode = policy;
+        self
+    }
+
+    /// Carry text subtitle tracks into the output (see [`ExportSettings::subtitles`]).
+    pub fn subtitles(mut self, on: bool) -> Self {
+        self.subtitles = on;
+        self
+    }
+
+    /// Carry chapter markers into the output (see [`ExportSettings::chapters`]).
+    pub fn chapters(mut self, on: bool) -> Self {
+        self.chapters = on;
         self
     }
 
@@ -205,6 +226,13 @@ pub struct ExportReport {
     pub elapsed: Duration,
     /// Why GPU encoding was requested but the video was encoded in software.
     pub hw_fallback_reason: Option<String>,
+    /// Subtitle tracks written to the output.
+    pub subtitle_tracks: usize,
+    /// Chapter markers written to the output.
+    pub chapters: usize,
+    /// Things that were asked for but not done, in plain words (for example a
+    /// subtitle track that could not be carried over).
+    pub notes: Vec<String>,
 }
 
 /// Export without progress reporting.
@@ -232,11 +260,15 @@ pub fn export_with_progress(
     settings.preset.check_available()?;
 
     let mut on_progress = on_progress;
-    let gpu = match (settings.hw_encode, nvenc_encoder(settings)) {
-        (HwPolicy::Off, _) => Ok(None),
-        (_, Ok(name)) => Ok(Some(name)),
-        (HwPolicy::Auto, Err(reason)) => Err(reason),
-        (HwPolicy::Require(_), Err(reason)) => return Err(Error::Unsupported(reason)),
+    // With GPU encoding off, nothing GPU-related is touched (not even a device probe).
+    let gpu = if settings.hw_encode == HwPolicy::Off {
+        Ok(None)
+    } else {
+        match (settings.hw_encode, nvenc_encoder(settings)) {
+            (_, Ok(name)) => Ok(Some(name)),
+            (HwPolicy::Require(_), Err(reason)) => return Err(Error::Unsupported(reason)),
+            (_, Err(reason)) => Err(reason),
+        }
     };
     let result = match gpu {
         Ok(None) => run_export(input, output, settings, None, &mut on_progress),
@@ -1158,6 +1190,218 @@ fn patch_flac_length(path: &Path, total_samples: u64) -> std::io::Result<()> {
 // --- driver -----------------------------------------------------------------
 
 /// `gpu_encoder`: encode video with this NVENC encoder instead of the preset's own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubKind {
+    /// MP4/MOV text track (`tx3g`).
+    MovText,
+    /// Matroska `S_TEXT/UTF8`.
+    Srt,
+}
+
+/// The slice of the source that ends up in the output.
+#[derive(Clone, Copy)]
+struct Window {
+    /// Time zero of the source (see `run_export`).
+    origin_secs: f64,
+    trim_start: f64,
+    trim_end: Option<f64>,
+}
+
+/// A subtitle track being written next to the audio and video.
+struct SubTrack {
+    out_index: usize,
+    out_tb: Rational,
+    kind: SubKind,
+    cues: Vec<crate::types::SubtitleCue>,
+}
+
+/// Read the source's text subtitle tracks and add an output stream for each.
+/// Anything that cannot be carried over is explained in `notes`.
+fn prepare_subtitles(
+    input: &Path,
+    ictx: &format::context::Input,
+    octx: &mut format::context::Output,
+    muxer: &str,
+    window: Window,
+    notes: &mut Vec<String>,
+) -> Result<Vec<SubTrack>> {
+    let wanted: Vec<(usize, ffmpeg::codec::Id, Option<String>, Option<String>)> = ictx
+        .streams()
+        .filter(|s| s.parameters().medium() == Type::Subtitle)
+        .map(|s| {
+            let md = s.metadata();
+            (
+                s.index(),
+                s.parameters().id(),
+                md.get("language").map(str::to_owned),
+                md.get("title").map(str::to_owned),
+            )
+        })
+        .collect();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (kind, codec_id) = match muxer {
+        "mp4" | "mov" => (SubKind::MovText, ffmpeg::codec::Id::MOV_TEXT),
+        "matroska" => (SubKind::Srt, ffmpeg::codec::Id::SUBRIP),
+        other => {
+            notes.push(format!(
+                "{other} output cannot hold these subtitles; they were left out"
+            ));
+            return Ok(Vec::new());
+        }
+    };
+    let Some(codec) = ffmpeg::encoder::find(codec_id) else {
+        notes.push("this FFmpeg build cannot write text subtitles; they were left out".into());
+        return Ok(Vec::new());
+    };
+
+    // A second reader, so the main one keeps its position.
+    let mut sub_in = format::input(&input)?;
+    let mut tracks = Vec::new();
+    for (index, id, language, title) in wanted {
+        if !crate::subtitle::is_text_codec(id) {
+            notes.push(format!(
+                "subtitle stream {index} ({}) is a picture format and was skipped",
+                id.name()
+            ));
+            continue;
+        }
+        let cues = match crate::subtitle::read_cues(&mut sub_in, index) {
+            Ok(c) => crate::subtitle::rebase_cues(
+                c,
+                window.origin_secs,
+                window.trim_start,
+                window.trim_end,
+            ),
+            Err(e) => {
+                notes.push(format!("subtitle stream {index} could not be read: {e}"));
+                continue;
+            }
+        };
+        if cues.is_empty() {
+            notes.push(format!(
+                "subtitle stream {index} has no lines in the exported range"
+            ));
+            continue;
+        }
+        let mut ost = octx.add_stream(codec)?;
+        // SAFETY: `ost` is a freshly created stream owned by `octx`, so its codec
+        // parameters pointer is valid. Writing the plain `codec_type` and `codec_id`
+        // fields tells the muxer what this stream carries; ffmpeg-next has no setter
+        // for subtitle streams.
+        unsafe {
+            let par = (*ost.as_mut_ptr()).codecpar;
+            (*par).codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE;
+            (*par).codec_id = codec_id.into();
+        }
+        ost.set_time_base(Rational::new(1, 1000));
+        let mut md = Dictionary::new();
+        if let Some(l) = language {
+            md.set("language", &l);
+        }
+        if let Some(t) = title {
+            md.set("title", &t);
+        }
+        ost.set_metadata(md);
+        tracks.push(SubTrack {
+            out_index: ost.index(),
+            out_tb: Rational::new(1, 1000),
+            kind,
+            cues,
+        });
+    }
+    Ok(tracks)
+}
+
+/// Write every cue of `track`. MP4/MOV text tracks need explicit empty samples
+/// in the gaps, otherwise a line would stay up until the next one.
+fn write_subtitle_track(octx: &mut format::context::Output, track: &SubTrack) -> Result<()> {
+    let tb = f64::from(track.out_tb.numerator()) / f64::from(track.out_tb.denominator().max(1));
+    let ts = |secs: f64| (secs / tb).round() as i64;
+    let send = |octx: &mut format::context::Output, data: &[u8], start: i64, dur: i64| {
+        let mut p = Packet::copy(data);
+        p.set_pts(Some(start));
+        p.set_dts(Some(start));
+        p.set_duration(dur.max(1));
+        p.set_stream(track.out_index);
+        p.write_interleaved(octx)
+    };
+    let mut cursor = 0.0_f64;
+    for cue in &track.cues {
+        let mut start = cue.start_secs;
+        if track.kind == SubKind::MovText {
+            // Samples cannot overlap: a new line replaces the previous one.
+            start = start.max(cursor);
+            if cue.end_secs <= start {
+                continue;
+            }
+            if start > cursor + 0.001 {
+                send(octx, &[0, 0], ts(cursor), ts(start) - ts(cursor))?;
+            }
+        }
+        let bytes = cue.text.as_bytes();
+        let data = match track.kind {
+            SubKind::MovText => {
+                let n = bytes.len().min(usize::from(u16::MAX));
+                let mut d = Vec::with_capacity(n + 2);
+                d.extend_from_slice(&(n as u16).to_be_bytes());
+                d.extend_from_slice(&bytes[..n]);
+                d
+            }
+            SubKind::Srt => bytes.to_vec(),
+        };
+        send(octx, &data, ts(start), ts(cue.end_secs) - ts(start))?;
+        cursor = cursor.max(cue.end_secs);
+    }
+    Ok(())
+}
+
+/// Copy chapter markers, shifted and clipped to the exported range.
+/// Returns how many were written (0 when the container cannot hold chapters).
+fn add_chapters(
+    ictx: &format::context::Input,
+    octx: &mut format::context::Output,
+    trim_start: f64,
+    trim_end: Option<f64>,
+) -> Result<usize> {
+    if !matches!(octx.format().name(), "mp4" | "mov" | "matroska" | "ipod") {
+        return Ok(0);
+    }
+    let len = trim_end.map(|e| e - trim_start);
+    let mut written = 0usize;
+    for ch in ictx.chapters() {
+        let tb = ch.time_base();
+        let f = f64::from(tb.numerator()) / f64::from(tb.denominator().max(1));
+        let mut start = ch.start() as f64 * f - trim_start;
+        let mut end = ch.end() as f64 * f - trim_start;
+        if end <= 0.0 || len.is_some_and(|l| start >= l) {
+            continue;
+        }
+        start = start.max(0.0);
+        if let Some(l) = len {
+            end = end.min(l);
+        }
+        if end <= start {
+            continue;
+        }
+        let title = ch
+            .metadata()
+            .get("title")
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("Chapter {}", written + 1));
+        octx.add_chapter(
+            written as i64,
+            Rational::new(1, 1000),
+            (start * 1000.0).round() as i64,
+            (end * 1000.0).round() as i64,
+            title,
+        )?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 fn run_export(
     input: &Path,
     output: &Path,
@@ -1257,6 +1501,29 @@ fn run_export(
         _ => None,
     };
 
+    let mut notes = Vec::new();
+    let mut sub_tracks = if settings.subtitles {
+        prepare_subtitles(
+            input,
+            &ictx,
+            &mut octx,
+            preset.muxer(),
+            Window {
+                origin_secs,
+                trim_start,
+                trim_end,
+            },
+            &mut notes,
+        )?
+    } else {
+        Vec::new()
+    };
+    let chapter_count = if settings.chapters {
+        add_chapters(&ictx, &mut octx, trim_start, trim_end)?
+    } else {
+        0
+    };
+
     octx.set_metadata(ictx.metadata().to_owned());
     let mut header_opts = Dictionary::new();
     if settings.fast_start && matches!(preset.muxer(), "mp4" | "mov" | "ipod") {
@@ -1276,6 +1543,14 @@ fn run_export(
             .stream(a.out_index)
             .map(|s| s.time_base())
             .unwrap_or(a.enc_tb);
+    }
+
+    for t in &mut sub_tracks {
+        t.out_tb = octx
+            .stream(t.out_index)
+            .map(|s| s.time_base())
+            .unwrap_or(Rational::new(1, 1000));
+        write_subtitle_track(&mut octx, t)?;
     }
 
     let mut last_reported = f64::NEG_INFINITY;
@@ -1362,5 +1637,8 @@ fn run_export(
         output_bytes: std::fs::metadata(output).map(|m| m.len()).unwrap_or(0),
         elapsed: started.elapsed(),
         hw_fallback_reason: None,
+        subtitle_tracks: sub_tracks.len(),
+        chapters: chapter_count,
+        notes,
     })
 }

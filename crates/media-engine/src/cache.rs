@@ -106,6 +106,15 @@ impl FrameCache {
 /// Seeking restarts from a keyframe, which is usually costlier than this.
 const MAX_FORWARD_DECODE: u64 = 30;
 
+/// A request this many frames (or fewer) before the previous one counts as
+/// scrubbing backwards.
+const SCRUB_WINDOW: u64 = 60;
+
+/// When scrubbing backwards, how many extra frames before the requested one are
+/// decoded and cached, so the next steps back cost nothing. Backwards is the
+/// expensive direction: the decoder can only run forward from a keyframe.
+const SCRUB_PREFETCH_MAX: u64 = 16;
+
 /// Random-access frame reader: a [`VideoDecoder`] fronted by a [`FrameCache`].
 ///
 /// Frames are addressed by index. For constant-frame-rate footage the index is
@@ -122,6 +131,11 @@ pub struct FrameReader {
     next_index: Option<u64>,
     /// Index of the final frame once end of stream has been seen.
     last_index: Option<u64>,
+    /// The frame requested last, to notice backward scrubbing.
+    last_request: Option<u64>,
+    /// Cache budget and the size of one decoded frame, to size the backward prefetch.
+    cache_bytes: usize,
+    frame_bytes: usize,
 }
 
 impl FrameReader {
@@ -175,6 +189,9 @@ impl FrameReader {
             index,
             next_index: Some(0),
             last_index: None,
+            last_request: None,
+            cache_bytes,
+            frame_bytes: 0,
         })
     }
 
@@ -226,6 +243,15 @@ impl FrameReader {
         self.frame(index)
     }
 
+    /// How many frames to read ahead of a backward step: at most a third of the
+    /// cache, so they are not evicted before they are used.
+    fn scrub_prefetch(&self) -> u64 {
+        if self.frame_bytes == 0 {
+            return 0;
+        }
+        ((self.cache_bytes / 3 / self.frame_bytes) as u64).min(SCRUB_PREFETCH_MAX)
+    }
+
     /// Frame number `index` (0-based). Past the end it returns the last frame.
     pub fn frame(&mut self, index: u64) -> Result<Arc<VideoFrame>> {
         let index = self.last_index.map_or(index, |last| index.min(last));
@@ -233,16 +259,26 @@ impl FrameReader {
             .index
             .as_ref()
             .map_or(index, |ix| index.min(ix.len() - 1));
+        let previous_request = self.last_request.replace(index);
         if let Some(f) = self.cache.get(index) {
             return Ok(f);
         }
 
         let forward_ok = matches!(self.next_index, Some(next) if index >= next && index - next <= MAX_FORWARD_DECODE);
         if !forward_ok {
+            // Scrubbing backwards: start a little earlier and keep the frames on the
+            // way, so the next steps back are cache hits instead of new seeks.
+            let scrubbing_back =
+                matches!(previous_request, Some(p) if index < p && p - index <= SCRUB_WINDOW);
+            let aim = if scrubbing_back {
+                index.saturating_sub(self.scrub_prefetch())
+            } else {
+                index
+            };
             // Aim a quarter frame past the frame start so rounding never lands on the previous frame.
             let target = match &self.index {
-                Some(ix) => ix.time_of(index) + 0.25 * ix.duration_of(index),
-                None => (index as f64 + 0.25) / self.fps,
+                Some(ix) => ix.time_of(aim) + 0.25 * ix.duration_of(aim),
+                None => (aim as f64 + 0.25) / self.fps,
             };
             self.decoder.seek(target)?;
             self.next_index = None;
@@ -274,6 +310,7 @@ impl FrameReader {
                     None => (frame.pts_secs.max(0.0) * self.fps + 0.5).floor() as u64,
                 },
             };
+            self.frame_bytes = frame.byte_len();
             let frame = Arc::new(frame);
             self.cache.insert(idx, Arc::clone(&frame));
             self.next_index = Some(idx + 1);

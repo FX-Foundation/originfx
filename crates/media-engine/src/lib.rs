@@ -59,6 +59,7 @@ pub mod index;
 pub mod preset;
 pub mod probe;
 pub mod proxy;
+pub mod subtitle;
 pub mod transcode;
 pub mod types;
 
@@ -71,6 +72,7 @@ pub use index::FrameIndex;
 pub use preset::{ExportPreset, Quality};
 pub use probe::probe;
 pub use proxy::{ProxyManager, ProxySettings};
+pub use subtitle::read_subtitles;
 pub use transcode::{export, export_with_progress, ExportReport, ExportSettings, Progress};
 pub use types::*;
 
