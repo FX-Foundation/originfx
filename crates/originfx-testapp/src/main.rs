@@ -2,6 +2,7 @@
 //! OriginFX test app: a small window to play, poke and check everything the engines do.
 
 mod app;
+mod inspector;
 mod player;
 mod selfcheck;
 
@@ -21,6 +22,12 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "OriginFX test app",
         options,
-        Box::new(|_cc| Ok(Box::new(app::App::new()))),
+        Box::new(move |_cc| {
+            let mut a = app::App::new();
+            if let Some(p) = args.first() {
+                a.open_path(p.into());
+            }
+            Ok(Box::new(a))
+        }),
     )
 }
