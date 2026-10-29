@@ -58,6 +58,12 @@ pub enum Error {
     BadEffect(String),
     #[error("{0} is not a picture clip, so it has no effects or picture settings")]
     NotPicture(ClipId),
+    #[error("{0} is a drawn graphic, not a file")]
+    Generated(AssetId),
+    #[error("{0} is a file, not a drawn graphic")]
+    NotGenerated(AssetId),
+    #[error("graphic: {0}")]
+    BadGraphic(String),
     #[error("picture setting: {0}")]
     BadLook(String),
     #[error("keyframe: {0}")]

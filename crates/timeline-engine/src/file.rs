@@ -21,7 +21,7 @@ use crate::retime::{Alignment, Speed, Transition, TransitionKind};
 use crate::time::{FrameRate, Time};
 
 /// The file format version this build writes and reads.
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
@@ -57,6 +57,9 @@ struct AssetDto {
     duration: Option<i64>,
     video: Vec<VideoDto>,
     audio: Vec<AudioDto>,
+    /// Added in format version 7: a drawn graphic instead of a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generator: Option<crate::graphics::Generator>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -566,6 +569,7 @@ fn to_dto(p: &Project) -> FileDto {
                         channels: s.channels,
                     })
                     .collect(),
+                generator: a.generator.clone(),
             })
             .collect(),
         sequences: p
@@ -628,6 +632,14 @@ fn from_dto(d: FileDto) -> Result<Project> {
                 id,
                 name: a.name,
                 path: a.path,
+                generator: match a.generator {
+                    None => None,
+                    Some(g) => {
+                        crate::graphics::validate(&g)
+                            .map_err(|e| Error::File(format!("asset {}: {e}", a.id)))?;
+                        Some(g)
+                    }
+                },
                 duration: a.duration.map(Time::from_ticks),
                 video,
                 audio: a

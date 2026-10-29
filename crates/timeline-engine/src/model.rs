@@ -53,7 +53,7 @@ pub struct NewAsset {
 ///
 /// The project stores the facts it needs to edit (length, sizes, rates), not the
 /// pixels. Frames and samples come from the Media Engine when they are wanted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Asset {
     pub id: AssetId,
     pub name: String,
@@ -61,9 +61,16 @@ pub struct Asset {
     pub duration: Option<Time>,
     pub video: Vec<VideoProps>,
     pub audio: Vec<AudioProps>,
+    /// Set for a graphic that is drawn rather than read from a file (then `path` is empty).
+    pub generator: Option<crate::graphics::Generator>,
 }
 
 impl Asset {
+    /// True for a drawn graphic (a shape, text, a colour or a gradient).
+    pub fn is_generated(&self) -> bool {
+        self.generator.is_some()
+    }
+
     /// True if the file has at least one video stream (or is an image).
     pub fn has_video(&self) -> bool {
         !self.video.is_empty()
@@ -977,7 +984,7 @@ impl Sequence {
 }
 
 /// A whole project: the media it knows about and its sequences.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Project {
     pub name: String,
     pub(crate) assets: OrdMap<AssetId, Asset>,

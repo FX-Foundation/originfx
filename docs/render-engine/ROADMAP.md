@@ -33,4 +33,4 @@
 | Sound effects (EQ, compression), stateful processing | Audio (see its [roadmap](../audio-engine/ROADMAP.md)); levels, pan, fades and limiting are done |
 | Animated position, scale and opacity | Done in the Compositing Engine, using the [Keyframe Engine](../keyframe-engine/README.md) curves (gain, pan and speed are done) |
 | Blur and basic colour effects are done ([Effects Engine](../effects-engine/README.md)); full colour grading, LUTs, keying | Effects (roadmap) |
-| Text, shapes, animation | Motion Graphics |
+| Text, shapes, animation | Done in the [Motion Graphics Engine](../motion-graphics-engine/README.md) |

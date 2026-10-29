@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/media-engine", "crates/timeline-engine", "crates/audio-engine", "crates/keyframe-engine", "crates/effects-engine", "crates/compositing-engine", "crates/render-engine", "crates/originfx-cli"]
+members = ["crates/media-engine", "crates/timeline-engine", "crates/audio-engine", "crates/keyframe-engine", "crates/effects-engine", "crates/compositing-engine", "crates/motion-graphics-engine", "crates/render-engine", "crates/originfx-cli"]
 
 [workspace.package]
 version = "0.1.0"

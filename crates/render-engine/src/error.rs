@@ -26,6 +26,10 @@ pub enum Error {
         path: PathBuf,
     },
 
+    /// A drawn graphic could not be drawn (usually its font).
+    #[error("graphic: {0}")]
+    Graphic(String),
+
     /// The range to render holds no frames.
     #[error("nothing to render: the sequence or range is empty")]
     Empty,

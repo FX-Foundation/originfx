@@ -62,6 +62,9 @@ pub struct Renderer<S: MediaSource> {
     settings: RenderSettings,
     /// Scaled copies of still images, which would otherwise be resized again for every frame.
     stills: HashMap<(AssetId, u32, usize, usize), Arc<Vec<u8>>>,
+    /// Drawn graphics at the frame's size: drawn once, used for every frame.
+    graphics: HashMap<(AssetId, usize, usize), Arc<Vec<u8>>>,
+    fonts: motion_graphics_engine::Fonts,
 }
 
 impl<S: MediaSource> Renderer<S> {
@@ -80,6 +83,8 @@ impl<S: MediaSource> Renderer<S> {
             source,
             settings,
             stills: HashMap::new(),
+            graphics: HashMap::new(),
+            fonts: motion_graphics_engine::Fonts::new(),
         })
     }
 
@@ -196,6 +201,21 @@ impl<S: MediaSource> Renderer<S> {
             .asset(clip.asset)
             .ok_or(timeline_engine::Error::NoSuchAsset(clip.asset))?
             .clone();
+        if let Some(g) = &asset.generator {
+            let key = (asset.id, cw, ch);
+            let pixels = match self.graphics.get(&key) {
+                Some(p) => Arc::clone(p),
+                None => {
+                    let p = motion_graphics_engine::render(g, cw, ch, &mut self.fonts)
+                        .map_err(|e| Error::Graphic(e.to_string()))?;
+                    let p = Arc::new(p);
+                    self.graphics.insert(key, Arc::clone(&p));
+                    p
+                }
+            };
+            blend_over(canvas, (cw, ch), &pixels, (cw, ch), (0, 0));
+            return Ok(());
+        }
         let secs = source_time.as_secs_f64();
         let frame = match self.source.video_frame(&asset, clip.stream, secs) {
             Ok(f) => f,
