@@ -11,8 +11,26 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
+  # Frees storage first: removes the artifacts of earlier builds (the free plan has only 0.5 GB).
+  cleanup:
+    name: Clear old build files
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete old artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/artifacts" --jq '.artifacts[].id' \
+            | while read -r id; do
+                gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" --silent && echo "deleted $id"
+              done
+
   linux:
     name: Linux
+    needs: cleanup
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +71,7 @@ jobs:
 
   windows:
     name: Windows
+    needs: cleanup
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
