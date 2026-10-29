@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use media_engine::{
-    hwaccel, probe, DecodeOptions, ExportPreset, ExportSettings, HwPolicy, Quality, VideoFrame,
+    hwaccel, probe, DecodeOptions, ExportPreset, ExportSettings, HwApi, HwPolicy, Quality,
+    VideoDecoder, VideoFrame,
 };
 use plugin_engine::{Host, Plugin};
 use render_engine::{
@@ -446,6 +447,38 @@ fn time_frames(ed: &Editor, seq: SequenceId, hw: HwPolicy) -> Result<(f64, f64, 
     Ok((first_ms, per, first.width, first.height))
 }
 
+/// Decode only (including the picture conversion), at the file's own size: how fast can the
+/// decoder alone go, and is the GPU really used?
+fn decode_probe(path: &Path, hw: HwPolicy) -> String {
+    let mut d = match VideoDecoder::open_with(path, DecodeOptions { hw }) {
+        Ok(d) => d,
+        Err(e) => return format!("could not open: {e}"),
+    };
+    let t = Instant::now();
+    if let Err(e) = d.next_frame() {
+        return format!("failed: {e}");
+    }
+    let first = t.elapsed().as_secs_f64() * 1000.0;
+    let t = Instant::now();
+    let mut n = 0;
+    while n < 40 {
+        match d.next_frame() {
+            Ok(Some(_)) => n += 1,
+            _ => break,
+        }
+    }
+    let per = t.elapsed().as_secs_f64() * 1000.0 / f64::from(n.max(1));
+    let how = match (d.hw_backend(), d.hw_fallback_reason()) {
+        (Some(api), _) => format!("on the GPU ({})", api.name()),
+        (None, Some(why)) => format!("CPU - GPU refused: {why}"),
+        (None, None) => "CPU".to_string(),
+    };
+    format!(
+        "{how}, first {first:.0} ms, then {per:.1} ms per source frame ({:.0} fps)",
+        1000.0 / per.max(0.001)
+    )
+}
+
 fn check_clip(path: &Path) -> Result<String, String> {
     let info = probe(path).map_err(|e| e.to_string())?;
     let v = info.primary_video().ok_or("the file has no picture")?;
@@ -456,13 +489,15 @@ fn check_clip(path: &Path) -> Result<String, String> {
         .min(1.0);
     let even = |n: u32| ((f64::from(n) * k / 2.0).round() as u32 * 2).max(2);
     let mut ed = Editor::new("clip check");
-    let seq = ed
-        .add_sequence(SequenceSettings {
-            width: even(v.width),
-            height: even(v.height),
-            ..Default::default()
-        })
-        .map_err(|e| e.to_string())?;
+    let mut settings = SequenceSettings {
+        width: even(v.width),
+        height: even(v.height),
+        ..Default::default()
+    };
+    if let Some(fr) = asset.video.first().and_then(|p| p.frame_rate) {
+        settings.frame_rate = fr;
+    }
+    let seq = ed.add_sequence(settings).map_err(|e| e.to_string())?;
     let id = ed.add_asset(asset).map_err(|e| e.to_string())?;
     let s = ed.project().sequence(seq).ok_or("no sequence")?;
     let v1 = s.video_tracks()[0].id;
@@ -489,6 +524,18 @@ fn check_clip(path: &Path) -> Result<String, String> {
         v.frame_rate
             .map_or(String::new(), |r| format!("{:.2} fps", r.as_f64()))
     );
+    out.push_str(&format!(
+        "\n    Decoder alone, CPU: {}",
+        decode_probe(path, HwPolicy::Off)
+    ));
+    out.push_str(&format!(
+        "\n    Decoder alone, GPU (auto): {}",
+        decode_probe(path, HwPolicy::Auto)
+    ));
+    out.push_str(&format!(
+        "\n    Decoder alone, GPU (cuda, required): {}",
+        decode_probe(path, HwPolicy::Require(HwApi::Cuda))
+    ));
     let (first, per, w, h) = time_frames(&ed, seq, HwPolicy::Off)?;
     out.push_str(&format!(
         "\n    CPU decode: first frame {first:.0} ms, then {per:.1} ms/frame ({:.0} fps) at {w}x{h}",

@@ -43,11 +43,13 @@ jobs:
       - name: Self-check (no window)
         run: xvfb-run -a ./dist/OriginFX-TestApp-linux-x86_64 --selfcheck 2>&1 | tail -25
         continue-on-error: true
+      # Only kept when started by hand: storage on the free plan is small (0.5 GB).
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
         with:
           name: OriginFX-TestApp-linux
           path: dist/OriginFX-TestApp-linux-x86_64
-          retention-days: 30
+          retention-days: 1
 
   windows:
     name: Windows
@@ -69,4 +71,4 @@ jobs:
         with:
           name: OriginFX-TestApp-windows
           path: dist/OriginFX-TestApp-windows-x86_64.exe
-          retention-days: 30
+          retention-days: 2

@@ -111,13 +111,16 @@ impl App {
             let even = |n: f64| ((n * k / 2.0).round() as u32 * 2).max(2);
             let (w, h) = (even(f64::from(w)), even(f64::from(h)));
             let mut ed = Editor::new("test");
-            let seq = ed
-                .add_sequence(SequenceSettings {
-                    width: w,
-                    height: h,
-                    ..Default::default()
-                })
-                .map_err(|e| e.to_string())?;
+            let mut settings = SequenceSettings {
+                width: w,
+                height: h,
+                ..Default::default()
+            };
+            // Play at the clip's own frame rate, not the default 24.
+            if let Some(fr) = asset.video.first().and_then(|p| p.frame_rate) {
+                settings.frame_rate = fr;
+            }
+            let seq = ed.add_sequence(settings).map_err(|e| e.to_string())?;
             let has_audio = !asset.audio.is_empty();
             let id = ed.add_asset(asset).map_err(|e| e.to_string())?;
             let s = ed.project().sequence(seq).ok_or("no sequence")?;

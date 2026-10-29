@@ -87,6 +87,10 @@ pub fn resize(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8>
     if sw == dw && sh == dh {
         return src.to_vec();
     }
+    // Video frames are opaque, which allows a much cheaper whole-number version.
+    if src.chunks_exact(4).all(|p| p[3] == 255) {
+        return resize_opaque(src, sw, sh, dw, dh);
+    }
     let xw = axis_weights(sw, dw);
     let yw = axis_weights(sh, dh);
 
@@ -137,6 +141,66 @@ pub fn resize(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8>
     out
 }
 
+/// The same filter as [`axis_weights`], as whole numbers that add up to exactly 1 << 14, so a
+/// flat colour stays exactly that colour.
+fn axis_weights_fixed(src: usize, dst: usize) -> Vec<(usize, Vec<i32>)> {
+    axis_weights(src, dst)
+        .into_iter()
+        .map(|(first, taps)| {
+            let mut w: Vec<i32> = taps.iter().map(|t| (t * 16384.0).round() as i32).collect();
+            let diff = 16384 - w.iter().sum::<i32>();
+            if let Some(m) = w.iter_mut().max() {
+                *m += diff;
+            }
+            (first, w)
+        })
+        .collect()
+}
+
+/// Resize a picture whose pixels are all opaque: whole-number maths on 8-bit data, no
+/// per-pixel alpha weighting and no large floating-point buffer. The result is opaque too.
+fn resize_opaque(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+    let xw = axis_weights_fixed(sw, dw);
+    let yw = axis_weights_fixed(sh, dh);
+
+    // Pass 1: horizontal.
+    let mut tmp = vec![0u8; sh * dw * 4];
+    par_rows(&mut tmp, dw * 4, |y, row| {
+        let line = &src[y * sw * 4..(y + 1) * sw * 4];
+        for (x, (first, taps)) in xw.iter().enumerate() {
+            let (mut r, mut g, mut b) = (8192i32, 8192i32, 8192i32);
+            for (k, w) in taps.iter().enumerate() {
+                let p = &line[(first + k) * 4..(first + k) * 4 + 3];
+                r += w * i32::from(p[0]);
+                g += w * i32::from(p[1]);
+                b += w * i32::from(p[2]);
+            }
+            let o = &mut row[x * 4..x * 4 + 4];
+            o[0] = (r >> 14) as u8;
+            o[1] = (g >> 14) as u8;
+            o[2] = (b >> 14) as u8;
+            o[3] = 255;
+        }
+    });
+
+    // Pass 2: vertical, a whole row at a time so the inner loop is a plain multiply-add.
+    let mut out = vec![0u8; dw * dh * 4];
+    par_rows(&mut out, dw * 4, |y, row| {
+        let (first, taps) = &yw[y];
+        let mut acc = vec![8192i32; dw * 4];
+        for (k, w) in taps.iter().enumerate() {
+            let line = &tmp[(first + k) * dw * 4..(first + k + 1) * dw * 4];
+            for (a, p) in acc.iter_mut().zip(line) {
+                *a += w * i32::from(*p);
+            }
+        }
+        for (o, a) in row.iter_mut().zip(&acc) {
+            *o = (a >> 14) as u8;
+        }
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +239,24 @@ mod tests {
         let out = resize(&src, 2, 1, 1, 1);
         assert_eq!(&out[..3], &[255, 0, 0]);
         assert!((i32::from(out[3]) - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn the_opaque_path_matches_the_general_path() {
+        // Same picture, once all opaque (fast path) and once with one pixel made almost
+        // opaque (general path): the two must agree to within rounding.
+        let mut a: Vec<u8> = (0..64 * 48 * 4).map(|i| (i * 37 % 253) as u8).collect();
+        for p in a.chunks_mut(4) {
+            p[3] = 255;
+        }
+        let fast = resize(&a, 64, 48, 40, 30);
+        let mut b = a.clone();
+        b[3] = 254;
+        let slow = resize(&b, 64, 48, 40, 30);
+        for (f, s) in fast.iter().zip(&slow).skip(4) {
+            assert!((i32::from(*f) - i32::from(*s)).abs() <= 2, "{f} vs {s}");
+        }
+        assert!(fast.chunks(4).all(|p| p[3] == 255));
     }
 
     #[test]
