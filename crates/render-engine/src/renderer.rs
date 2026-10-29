@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 use crate::scale::resize;
 use crate::source::MediaSource;
 use crate::transition::{blend, fade_in_gain, fade_out_gain};
+use audio_engine::Limiter;
 
 /// What to do when a clip's media file is not on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -36,6 +37,8 @@ pub struct RenderSettings {
     /// What is behind the bottom layer. Opaque black by default.
     pub background: [u8; 4],
     pub missing_media: MissingMedia,
+    /// How the final mix is kept within full scale. Hard clipping by default.
+    pub limiter: Limiter,
 }
 
 impl Default for RenderSettings {
@@ -44,6 +47,7 @@ impl Default for RenderSettings {
             fit: Fit::Contain,
             background: [0, 0, 0, 255],
             missing_media: MissingMedia::Fail,
+            limiter: Limiter::HardClip,
         }
     }
 }
@@ -238,6 +242,8 @@ impl<S: MediaSource> Renderer<S> {
             if !track.enabled || (any_solo && !track.solo) {
                 continue;
             }
+            // What this track's clips add up to, before the track's own level and pan.
+            let mut bus = vec![0f32; count * 2];
             // Clips can be heard a little before and after their own span while a transition
             // is under way, and clip edges are rounded to samples, so look wider.
             let pad = Time::from_secs_f64(MAX_TRANSITION_SECS) + Time::from_samples(1, rate);
@@ -286,10 +292,26 @@ impl<S: MediaSource> Renderer<S> {
                     }
                     Err(e) => return Err(e),
                 };
-                if tin.is_some() || tout.is_some() {
+                let fade_in = clip
+                    .fade_in
+                    .map(|f| (f.curve, f.duration.to_samples_round(rate)));
+                let fade_out = clip
+                    .fade_out
+                    .map(|f| (f.curve, f.duration.to_samples_round(rate)));
+                if tin.is_some() || tout.is_some() || fade_in.is_some() || fade_out.is_some() {
                     for (j, pair) in part.chunks_exact_mut(2).enumerate() {
                         let s = from + j as i64;
                         let mut g = 1.0f32;
+                        if let Some((curve, n)) = fade_in {
+                            if s >= cs && s < cs + n {
+                                g *= audio_engine::fade_in_gain(curve, progress(s, cs, cs + n));
+                            }
+                        }
+                        if let Some((curve, n)) = fade_out {
+                            if s >= ce - n && s < ce {
+                                g *= audio_engine::fade_out_gain(curve, progress(s, ce - n, ce));
+                            }
+                        }
                         if let Some((a, b)) = tin {
                             if s < b {
                                 g *= fade_in_gain(progress(s, a, b));
@@ -304,15 +326,19 @@ impl<S: MediaSource> Renderer<S> {
                         pair[1] *= g;
                     }
                 }
+                audio_engine::gain::apply_gain_pan(&mut part, clip.gain.linear(), clip.pan.value());
                 let at = ((from - first) * 2) as usize;
-                for (m, s) in mix[at..at + part.len()].iter_mut().zip(&part) {
+                for (m, s) in bus[at..at + part.len()].iter_mut().zip(&part) {
                     *m += *s;
                 }
             }
+            audio_engine::gain::apply_gain_pan(&mut bus, track.gain.linear(), track.pan.value());
+            for (m, s) in mix.iter_mut().zip(&bus) {
+                *m += *s;
+            }
         }
-        for s in &mut mix {
-            *s = s.clamp(-1.0, 1.0);
-        }
+        audio_engine::gain::apply_gain_pan(&mut mix, seq.master_gain.linear(), 0.0);
+        audio_engine::apply_limiter(&mut mix, self.settings.limiter);
         Ok(mix)
     }
 

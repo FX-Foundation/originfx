@@ -9,7 +9,7 @@ The ten engines are built one at a time, in this order. Each engine lives in its
 | 2 | Timeline | **Done and tested** | [docs/timeline-engine](timeline-engine/README.md) |
 | 3 | Render | **Done and tested** | [docs/render-engine](render-engine/README.md) |
 | 4 | Video Editing | **Done and tested** | [docs/video-editing](video-editing/README.md) |
-| 5 | Audio | Planned | n/a |
+| 5 | Audio | **Done and tested** | [docs/audio-engine](audio-engine/README.md) |
 | 6 | Keyframe | Planned | n/a |
 | 7 | Effects | Planned | n/a |
 | 8 | Compositing | Planned | n/a |

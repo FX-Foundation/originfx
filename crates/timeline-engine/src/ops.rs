@@ -10,6 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use im::OrdMap;
 
+use crate::audio::{ClipAudio, Gain, Pan};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, SequenceId, TrackId};
 use crate::model::{Asset, Clip, Project, Sequence, Track, TrackKind, SOURCE_SLACK};
@@ -105,6 +106,9 @@ pub struct TrackUpdate {
     pub enabled: Option<bool>,
     pub locked: Option<bool>,
     pub solo: Option<bool>,
+    /// Audio tracks: level and pan of the whole track.
+    pub gain: Option<Gain>,
+    pub pan: Option<Pan>,
 }
 
 /// What the operations need besides the sequence: the assets and the id counter.
@@ -255,13 +259,15 @@ fn clear_range(track: &mut Track, cx: &mut Ctx<'_>, range: TimeRange) {
         track.items.remove(&c.start);
         let mut kept_left = false;
         if c.start < range.start {
-            let left = c.window(c.start, range.start);
+            let mut left = c.window(c.start, range.start);
+            left.fade_out = None;
             track.items.insert(left.start, left);
             kept_left = true;
         }
         if c.end() > range.end {
             let mut right = c.window(range.end, c.end());
             right.transition_in = None;
+            right.fade_in = None;
             if kept_left {
                 right.id = cx.clip_id();
                 right.link = None;
@@ -294,10 +300,12 @@ fn split_tracks_at(
         else {
             continue;
         };
-        let left = clip.window(clip.start, t);
+        let mut left = clip.window(clip.start, t);
+        left.fade_out = None;
         let mut right = clip.window(t, clip.end());
         right.id = cx.clip_id();
         right.transition_in = None;
+        right.fade_in = None;
         right.link = clip
             .link
             .map(|l| *new_links.entry(l).or_insert_with(|| cx.link_id()));
@@ -423,6 +431,17 @@ pub(crate) fn update_track(seq: &mut Sequence, id: TrackId, update: TrackUpdate)
     if let Some(v) = update.solo {
         track.solo = v;
     }
+    if update.gain.is_some() || update.pan.is_some() {
+        if track.kind != TrackKind::Audio {
+            return Err(Error::Invalid(format!("{id} is not an audio track")));
+        }
+        if let Some(v) = update.gain {
+            track.gain = v;
+        }
+        if let Some(v) = update.pan {
+            track.pan = v;
+        }
+    }
     Ok(())
 }
 
@@ -507,6 +526,10 @@ pub(crate) fn place_clip(
         speed: spec.speed,
         reverse: spec.reverse,
         transition_in: None,
+        gain: Gain::UNITY,
+        pan: Pan::CENTRE,
+        fade_in: None,
+        fade_out: None,
     };
 
     match mode {
@@ -1224,4 +1247,54 @@ pub(crate) fn set_transition(
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Sound settings
+// ---------------------------------------------------------------------------
+
+/// Change the gain, pan and fades of audio clips (and the clips linked to them: a linked
+/// picture is skipped, since it has no sound settings).
+pub(crate) fn set_clip_audio(
+    seq: &mut Sequence,
+    ids: &[ClipId],
+    change: ClipAudio,
+    links: LinkMode,
+) -> Result<()> {
+    let mut any = false;
+    for id in expand(seq, ids, links)? {
+        let (tid, mut c) = locate(seq, id)?;
+        let is_audio = seq.track_position(tid).map(|(k, _)| k) == Some(TrackKind::Audio);
+        if !is_audio {
+            if ids.contains(&id) {
+                return Err(Error::NotAudio(id));
+            }
+            continue;
+        }
+        ensure_unlocked(seq, tid)?;
+        any = true;
+        if let Some(g) = change.gain {
+            c.gain = g;
+        }
+        if let Some(p) = change.pan {
+            c.pan = p;
+        }
+        if let Some(f) = change.fade_in {
+            c.fade_in = f.filter(|f| f.duration > Time::ZERO);
+        }
+        if let Some(f) = change.fade_out {
+            c.fade_out = f.filter(|f| f.duration > Time::ZERO);
+        }
+        let total = c.fade_in.map_or(Time::ZERO, |f| f.duration)
+            + c.fade_out.map_or(Time::ZERO, |f| f.duration);
+        if total > c.duration {
+            return Err(Error::FadesTooLong { clip: id });
+        }
+        put(seq, tid, c)?;
+    }
+    if any {
+        Ok(())
+    } else {
+        Err(Error::NothingTo("change: no audio clip given"))
+    }
 }

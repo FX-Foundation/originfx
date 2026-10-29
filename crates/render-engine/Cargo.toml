@@ -15,6 +15,7 @@ name = "render_engine"
 originfx-timeline-engine = { path = "../timeline-engine" }
 originfx-media-engine = { path = "../media-engine" }
 thiserror = "2"
+originfx-audio-engine = { path = "../audio-engine" }
 
 [dev-dependencies]
 tempfile = "3"

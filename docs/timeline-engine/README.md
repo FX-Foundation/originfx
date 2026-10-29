@@ -77,12 +77,13 @@ hold one while you keep editing.
 ## Project files
 
 `Project::save` / `load` write plain, human-readable JSON (`"format": "originfx-project"`,
-`"version": 2`; version 1 files still load). Saving goes through a temporary file and a rename, so a crash cannot leave half a
+`"version": 3`; versions 1 and 2 files still load). Saving goes through a temporary file and a rename, so a crash cannot leave half a
 project. Loading runs the full rule check, so a damaged or hand-edited file is refused with a clear
 error. A file from a newer version is refused with `UnsupportedVersion` instead of being guessed at.
 
 Clips also carry a speed, a reverse flag and an optional transition from the clip before them; see the
-[Video Editing Engine guide](../video-editing/README.md).
+[Video Editing Engine guide](../video-editing/README.md). Audio clips, audio tracks and sequences also carry gain, pan,
+fades and a master level; see the [Audio Engine guide](../audio-engine/README.md).
 
 ## From the command line
 

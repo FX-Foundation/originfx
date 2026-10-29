@@ -23,6 +23,7 @@ pub mod scale;
 pub mod source;
 pub mod transition;
 
+pub use audio_engine::Limiter;
 pub use composite::{blend_over, placement, solid, Fit, Placement};
 pub use error::{Error, Result};
 pub use export::{

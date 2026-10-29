@@ -45,6 +45,7 @@
 //! With the `media` cargo feature, [`media::probe_asset`] reads a real file through the
 //! Media Engine and returns a ready [`NewAsset`].
 
+pub mod audio;
 pub mod editor;
 pub mod error;
 pub mod file;
@@ -57,6 +58,7 @@ pub mod query;
 pub mod retime;
 pub mod time;
 
+pub use audio::{ClipAudio, Fade, FadeCurve, Gain, Pan};
 pub use editor::Editor;
 pub use error::{Error, Result};
 pub use ids::*;

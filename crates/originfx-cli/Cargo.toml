@@ -13,6 +13,7 @@ name = "originfx"
 path = "src/main.rs"
 
 [dependencies]
+originfx-audio-engine = { path = "../audio-engine" }
 originfx-media-engine = { path = "../media-engine" }
 originfx-render-engine = { path = "../render-engine" }
 originfx-timeline-engine = { path = "../timeline-engine", features = ["media"] }

@@ -36,5 +36,5 @@
 | Animated values (speed ramps, transition curves) | Keyframe |
 | Optical-flow slow motion, blurs, glows | Effects |
 | Opacity, blend modes, transforms | Compositing |
-| Pitch shifting, loudness, sound effects | Audio |
+| Pitch shifting, sound effects | Audio (see its [roadmap](../audio-engine/ROADMAP.md)) |
 | Custom transitions | Plugin |

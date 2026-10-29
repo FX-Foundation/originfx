@@ -147,12 +147,12 @@ fn push(a: &[u8], b: &[u8], w: usize, h: usize, p: f32, dir: Direction) -> Vec<u
 /// The gain of the incoming clip's sound at `progress` through a crossfade (equal power, so the
 /// level stays steady across the join).
 pub fn fade_in_gain(progress: f64) -> f32 {
-    (progress.clamp(0.0, 1.0) * std::f64::consts::FRAC_PI_2).sin() as f32
+    audio_engine::fade_in_gain(audio_engine::FadeCurve::EqualPower, progress)
 }
 
 /// The gain of the outgoing clip's sound at `progress` through a crossfade.
 pub fn fade_out_gain(progress: f64) -> f32 {
-    (progress.clamp(0.0, 1.0) * std::f64::consts::FRAC_PI_2).cos() as f32
+    audio_engine::fade_out_gain(audio_engine::FadeCurve::EqualPower, progress)
 }
 
 #[cfg(test)]

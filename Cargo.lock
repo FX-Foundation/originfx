@@ -522,10 +522,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "originfx-audio-engine"
+version = "0.1.0"
+
+[[package]]
 name = "originfx-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "originfx-audio-engine",
  "originfx-media-engine",
  "originfx-render-engine",
  "originfx-timeline-engine",
@@ -546,6 +551,7 @@ dependencies = [
 name = "originfx-render-engine"
 version = "0.1.0"
 dependencies = [
+ "originfx-audio-engine",
  "originfx-media-engine",
  "originfx-timeline-engine",
  "tempfile",
@@ -557,6 +563,7 @@ name = "originfx-timeline-engine"
 version = "0.1.0"
 dependencies = [
  "im",
+ "originfx-audio-engine",
  "originfx-media-engine",
  "proptest",
  "serde",

@@ -33,6 +33,23 @@ impl From<FitArg> for Fit {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+pub enum LimiterArg {
+    /// Cut anything above full scale flat.
+    Hard,
+    /// Round loud peaks smoothly instead (starts above 0.8).
+    Soft,
+}
+
+impl From<LimiterArg> for render_engine::Limiter {
+    fn from(l: LimiterArg) -> Self {
+        match l {
+            LimiterArg::Hard => render_engine::Limiter::HardClip,
+            LimiterArg::Soft => render_engine::Limiter::SoftClip,
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct RenderArgs {
     /// The project file (`.originfx`).
@@ -64,6 +81,9 @@ pub struct RenderArgs {
     to: Option<f64>,
     #[arg(long, value_enum, default_value = "contain")]
     fit: FitArg,
+    /// How the final mix is kept within full scale.
+    #[arg(long, value_enum, default_value = "hard")]
+    limiter: LimiterArg,
     /// Show missing media as magenta and silence instead of stopping.
     #[arg(long)]
     allow_offline: bool,
@@ -151,6 +171,7 @@ pub fn run(a: RenderArgs) -> CliResult {
         render: RenderSettings {
             fit: a.fit.into(),
             missing_media: missing(a.allow_offline),
+            limiter: a.limiter.into(),
             ..Default::default()
         },
         range,

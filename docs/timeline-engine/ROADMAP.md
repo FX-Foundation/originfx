@@ -17,7 +17,6 @@
 | Keyframes (volume, position, opacity over time) | Keyframe |
 | Effects and colour on clips | Effects |
 | Opacity, blend modes, transforms | Compositing |
-| Audio levels, pan, fades, mixing | Audio |
 | Nested sequences (a sequence used as a clip) | Next step for this engine once Render exists |
 | Copy / paste of clips between sequences | This engine, with the editor UI |
 | Multicam, subclips, proxies per clip | Later |

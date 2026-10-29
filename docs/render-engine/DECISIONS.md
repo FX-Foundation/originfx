@@ -13,7 +13,7 @@ Defaults chosen while building this engine, each with the way to reverse it. Dec
 | R5 | Pixel aspect ratio is ignored | Needs per-clip metadata the model does not have yet | See [ROADMAP.md](ROADMAP.md) item 7 |
 | R6 | Background is opaque black | What every player shows for nothing | `RenderSettings::background` |
 | R7 | Missing media stops an export; previews can show magenta ("media offline") and silence | A final file must never silently contain placeholders | `MissingMedia` in `renderer.rs` |
-| R8 | Sound is mixed as a plain sum, then clipped at full scale | Predictable, and the Audio Engine owns real mixing (gain, pan, limiting) | `Renderer::audio_samples` |
+| R8 | Sound is mixed as a plain sum, then clipped at full scale. **Superseded by [A6 and A7](../audio-engine/DECISIONS.md)**: the mix now has clip, track and master levels and a choice of limiter (hard clip is still the default) | Predictable, and the Audio Engine owns real mixing (gain, pan, limiting) | `Renderer::audio_samples` |
 | R9 | Audio is rendered per frame from absolute sample positions (`round(frame_time x rate)`) | Rounding never accumulates, so picture and sound end together at any frame rate, including 29.97 | `feed` in `export.rs` |
 | R10 | Clip edges for sound are rounded to the nearest sample | Adjacent clips then join exactly with no gap or overlap | `audio_samples` in `renderer.rs` |
 | R11 | Export reuses the Media Engine's exporter by handing it frames, not a second encoder | All 19 presets, GPU encode, colour tagging and progress work for free and cannot drift apart | `export.rs` |
