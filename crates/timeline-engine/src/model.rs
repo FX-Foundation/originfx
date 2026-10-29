@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use im::{OrdMap, Vector};
 
+use crate::audio::{Fade, Gain, Pan};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
 use crate::retime::{Speed, Transition, MAX_TRANSITION_SECS};
@@ -120,6 +121,11 @@ pub struct Clip {
     pub reverse: bool,
     /// A transition from the clip before into this one. The two must touch.
     pub transition_in: Option<Transition>,
+    /// Audio clips only: level change, pan and fades. Neutral on video clips.
+    pub gain: Gain,
+    pub pan: Pan,
+    pub fade_in: Option<Fade>,
+    pub fade_out: Option<Fade>,
 }
 
 /// Media is allowed to overshoot its length by this much (a few ticks), so that rounding in
@@ -220,6 +226,9 @@ pub struct Track {
     pub locked: bool,
     /// Audio only: when any track is soloed, only soloed tracks are heard.
     pub solo: bool,
+    /// Audio tracks: level change and pan applied to the sum of the track's clips.
+    pub gain: Gain,
+    pub pan: Pan,
     pub(crate) items: OrdMap<Time, Clip>,
 }
 
@@ -232,6 +241,8 @@ impl Track {
             enabled: true,
             locked: false,
             solo: false,
+            gain: Gain::UNITY,
+            pan: Pan::CENTRE,
             items: OrdMap::new(),
         }
     }
@@ -423,6 +434,8 @@ pub struct Sequence {
     pub sample_rate: u32,
     pub drop_frame: bool,
     pub timecode_start: Time,
+    /// Level change applied to the whole mix, after every track.
+    pub master_gain: Gain,
     pub(crate) video: Vector<Track>,
     pub(crate) audio: Vector<Track>,
     pub(crate) markers: Vector<Marker>,
@@ -439,6 +452,7 @@ impl Sequence {
             sample_rate: settings.sample_rate,
             drop_frame: settings.drop_frame,
             timecode_start: settings.timecode_start,
+            master_gain: Gain::UNITY,
             video: Vector::new(),
             audio: Vector::new(),
             markers: Vector::new(),
@@ -596,6 +610,36 @@ impl Sequence {
         None
     }
 
+    /// Shorten fades that no longer fit their clip (after a trim): the fade out first, then the fade in.
+    pub(crate) fn fit_fades(&mut self) {
+        for kind in [TrackKind::Audio] {
+            for track in self.tracks_of_mut(kind).iter_mut() {
+                let starts: Vec<Time> = track
+                    .items
+                    .values()
+                    .filter(|c| {
+                        let total = c.fade_in.map_or(Time::ZERO, |f| f.duration)
+                            + c.fade_out.map_or(Time::ZERO, |f| f.duration);
+                        total > c.duration
+                    })
+                    .map(|c| c.start)
+                    .collect();
+                for start in starts {
+                    if let Some(c) = track.items.get_mut(&start) {
+                        let d = c.duration;
+                        if let Some(fi) = c.fade_in.as_mut() {
+                            fi.duration = fi.duration.min(d);
+                        }
+                        let room = d - c.fade_in.map_or(Time::ZERO, |f| f.duration);
+                        if let Some(fo) = c.fade_out.as_mut() {
+                            fo.duration = fo.duration.min(room);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Drop every transition that no longer works (after an edit moved a clip away, trimmed
     /// away its spare media, and so on).
     pub(crate) fn prune_transitions(&mut self, assets: &OrdMap<AssetId, Asset>) {
@@ -679,6 +723,22 @@ impl Sequence {
                         if clip.source_in + clip.source_len() > limit + SOURCE_SLACK {
                             return bad(format!("{} runs past the end of its media", clip.id));
                         }
+                    }
+                    let fades = clip.fade_in.map_or(Time::ZERO, |f| f.duration)
+                        + clip.fade_out.map_or(Time::ZERO, |f| f.duration);
+                    if clip.fade_in.is_some_and(|f| f.duration < Time::ZERO)
+                        || clip.fade_out.is_some_and(|f| f.duration < Time::ZERO)
+                        || fades > clip.duration
+                    {
+                        return bad(format!("{} has fades longer than the clip", clip.id));
+                    }
+                    if kind == TrackKind::Video
+                        && (!clip.gain.is_unity()
+                            || !clip.pan.is_centre()
+                            || clip.fade_in.is_some()
+                            || clip.fade_out.is_some())
+                    {
+                        return bad(format!("{} is a video clip with sound settings", clip.id));
                     }
                     if let Some(problem) = self.transition_problem(track, clip, assets) {
                         return bad(format!("transition into {}: {problem}", clip.id));

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use im::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
+use crate::audio::{Fade, FadeCurve, Gain, Pan};
 use crate::error::{Error, Result};
 use crate::ids::*;
 use crate::model::*;
@@ -17,7 +18,7 @@ use crate::retime::{Alignment, Speed, Transition, TransitionKind};
 use crate::time::{FrameRate, Time};
 
 /// The file format version this build writes and reads.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
@@ -75,6 +76,58 @@ struct ClipDto {
     reverse: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     transition_in: Option<TransitionDto>,
+    /// Added in format version 3: sound settings (hundredths of a dB, percent).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    gain_cb: i32,
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pan: i16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fade_in: Option<FadeDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fade_out: Option<FadeDto>,
+}
+
+fn is_zero(v: &i32) -> bool {
+    *v == 0
+}
+
+fn is_zero_i16(v: &i16) -> bool {
+    *v == 0
+}
+
+#[derive(Serialize, Deserialize)]
+struct FadeDto {
+    duration: i64,
+    curve: String,
+}
+
+fn fade_out(f: Option<Fade>) -> Option<FadeDto> {
+    f.map(|f| FadeDto {
+        duration: f.duration.ticks(),
+        curve: f.curve.as_str().to_string(),
+    })
+}
+
+fn fade_in_dto(f: Option<FadeDto>) -> Result<Option<Fade>> {
+    f.map(|f| {
+        Ok(Fade {
+            duration: Time::from_ticks(f.duration),
+            curve: FadeCurve::parse(&f.curve)
+                .ok_or_else(|| Error::File(format!("unknown fade curve {:?}", f.curve)))?,
+        })
+    })
+    .transpose()
+}
+
+fn gain_in(cb: i32) -> Result<Gain> {
+    if !(-12_000..=2_400).contains(&cb) {
+        return Err(Error::File(format!("gain {cb} is out of range")));
+    }
+    Ok(Gain::from_centibels(cb))
+}
+
+fn pan_in(p: i16) -> Result<Pan> {
+    Pan::new(p).ok_or_else(|| Error::File(format!("pan {p} is out of range")))
 }
 
 fn one() -> u32 {
@@ -95,6 +148,10 @@ struct TrackDto {
     enabled: bool,
     locked: bool,
     solo: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    gain_cb: i32,
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pan: i16,
     clips: Vec<ClipDto>,
 }
 
@@ -118,6 +175,8 @@ struct SequenceDto {
     sample_rate: u32,
     drop_frame: bool,
     timecode_start: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    master_gain_cb: i32,
     video: Vec<TrackDto>,
     audio: Vec<TrackDto>,
     markers: Vec<MarkerDto>,
@@ -138,6 +197,8 @@ fn track_out(t: &Track) -> TrackDto {
         enabled: t.enabled,
         locked: t.locked,
         solo: t.solo,
+        gain_cb: t.gain.centibels(),
+        pan: t.pan.percent(),
         clips: t
             .clips()
             .map(|c| ClipDto {
@@ -158,6 +219,10 @@ fn track_out(t: &Track) -> TrackDto {
                     duration: t.duration.ticks(),
                     alignment: t.alignment.as_str().to_string(),
                 }),
+                gain_cb: c.gain.centibels(),
+                pan: c.pan.percent(),
+                fade_in: fade_out(c.fade_in),
+                fade_out: fade_out(c.fade_out),
             })
             .collect(),
     }
@@ -168,6 +233,8 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
     t.enabled = d.enabled;
     t.locked = d.locked;
     t.solo = d.solo;
+    t.gain = gain_in(d.gain_cb)?;
+    t.pan = pan_in(d.pan)?;
     for c in d.clips {
         let clip = Clip {
             id: ClipId(c.id),
@@ -193,6 +260,10 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
                     })?,
                 }),
             },
+            gain: gain_in(c.gain_cb)?,
+            pan: pan_in(c.pan)?,
+            fade_in: fade_in_dto(c.fade_in)?,
+            fade_out: fade_in_dto(c.fade_out)?,
         };
         t.items.insert(clip.start, clip);
     }
@@ -244,6 +315,7 @@ fn to_dto(p: &Project) -> FileDto {
                 sample_rate: s.sample_rate,
                 drop_frame: s.drop_frame,
                 timecode_start: s.timecode_start.ticks(),
+                master_gain_cb: s.master_gain.centibels(),
                 video: s.video_tracks().iter().map(track_out).collect(),
                 audio: s.audio_tracks().iter().map(track_out).collect(),
                 markers: s
@@ -318,6 +390,7 @@ fn from_dto(d: FileDto) -> Result<Project> {
             audio_tracks: 0,
         };
         let mut seq = Sequence::new(id, settings);
+        seq.master_gain = gain_in(s.master_gain_cb)?;
         seq.video = s
             .video
             .into_iter()

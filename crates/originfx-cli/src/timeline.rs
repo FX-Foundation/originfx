@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use timeline_engine::media::probe_asset;
 use timeline_engine::{
-    Alignment, AssetId, ClipId, Edge, Editor, FrameRate, LinkMode, MarkerColour, PlaceMode,
-    Project, Ripple, SequenceId, SequenceSettings, Speed, SpeedMode, Time, TrackKind, Transition,
-    TransitionKind,
+    Alignment, AssetId, ClipAudio, ClipId, Edge, Editor, Fade, FadeCurve, FrameRate, Gain,
+    LinkMode, MarkerColour, Pan, PlaceMode, Project, Ripple, SequenceId, SequenceSettings, Speed,
+    SpeedMode, Time, TrackKind, TrackUpdate, Transition, TransitionKind,
 };
 
 use crate::CliResult;
@@ -133,6 +133,44 @@ enum Cmd {
         #[arg(long)]
         remove: bool,
     },
+    /// Set a clip's volume in decibels (and its linked sound clips): `-6`, `+3`, `-inf` for silence.
+    Gain {
+        clip: String,
+        #[arg(allow_hyphen_values = true)]
+        db: String,
+    },
+    /// Pan a sound clip: -100 (hard left) to 100 (hard right), 0 for centre.
+    Pan {
+        clip: String,
+        #[arg(allow_hyphen_values = true)]
+        percent: i16,
+    },
+    /// Fade a sound clip in and/or out (seconds; 0 removes a fade).
+    Fade {
+        clip: String,
+        #[arg(long = "in")]
+        fade_in: Option<f64>,
+        #[arg(long = "out")]
+        fade_out: Option<f64>,
+        /// linear, equal-power or smooth.
+        #[arg(long, default_value = "smooth")]
+        curve: String,
+    },
+    /// Set the level or pan of a whole audio track (track numbers start at 1).
+    Track {
+        number: usize,
+        #[arg(long, allow_hyphen_values = true)]
+        gain: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        pan: Option<i16>,
+    },
+    /// Set the level of the whole mix, or `--normalize` it to a loudness target (like -23 or -16 LUFS).
+    Master {
+        #[arg(allow_hyphen_values = true)]
+        db: Option<String>,
+        #[arg(long, allow_hyphen_values = true, conflicts_with = "db")]
+        normalize: Option<f64>,
+    },
     /// Add a marker.
     Marker {
         at: f64,
@@ -149,6 +187,21 @@ enum Cmd {
 fn id_number(text: &str) -> Result<u64, String> {
     let digits: String = text.chars().filter(char::is_ascii_digit).collect();
     digits.parse().map_err(|_| format!("'{text}' is not an id"))
+}
+
+fn parse_gain(text: &str) -> Result<Gain, String> {
+    let t = text
+        .trim()
+        .trim_end_matches("dB")
+        .trim_end_matches("db")
+        .trim();
+    if t.eq_ignore_ascii_case("-inf") {
+        return Ok(Gain::SILENT);
+    }
+    t.parse::<f64>()
+        .ok()
+        .and_then(Gain::from_db)
+        .ok_or_else(|| format!("'{text}' is not a level in decibels (at most +24)"))
 }
 
 fn secs(s: f64) -> Time {
@@ -415,6 +468,128 @@ pub fn run(args: TimelineArgs) -> CliResult {
             ed.set_transition(seq, ClipId(id_number(&clip)?), tr, LinkMode::Follow)?;
             save(&ed, &path, before)?;
             println!("{}", if remove { "removed" } else { "added" });
+        }
+        Cmd::Gain { clip, db } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let g = parse_gain(&db)?;
+            ed.set_clip_audio(
+                seq,
+                &[ClipId(id_number(&clip)?)],
+                ClipAudio {
+                    gain: Some(g),
+                    ..Default::default()
+                },
+                LinkMode::Follow,
+            )?;
+            save(&ed, &path, before)?;
+            println!("gain {g}");
+        }
+        Cmd::Pan { clip, percent } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let p = Pan::new(percent).ok_or("pan must be between -100 and 100")?;
+            ed.set_clip_audio(
+                seq,
+                &[ClipId(id_number(&clip)?)],
+                ClipAudio {
+                    pan: Some(p),
+                    ..Default::default()
+                },
+                LinkMode::Follow,
+            )?;
+            save(&ed, &path, before)?;
+            println!("pan {p}");
+        }
+        Cmd::Fade {
+            clip,
+            fade_in,
+            fade_out,
+            curve,
+        } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let curve =
+                FadeCurve::parse(&curve).ok_or("curve must be linear, equal-power or smooth")?;
+            let make = |s: Option<f64>| {
+                s.map(|s| {
+                    (s > 0.0).then(|| Fade {
+                        duration: secs(s),
+                        curve,
+                    })
+                })
+            };
+            ed.set_clip_audio(
+                seq,
+                &[ClipId(id_number(&clip)?)],
+                ClipAudio {
+                    fade_in: make(fade_in),
+                    fade_out: make(fade_out),
+                    ..Default::default()
+                },
+                LinkMode::Follow,
+            )?;
+            save(&ed, &path, before)?;
+            println!("faded");
+        }
+        Cmd::Track { number, gain, pan } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let tid = track_id(ed.project(), seq, TrackKind::Audio, number)?;
+            let update = TrackUpdate {
+                gain: gain.as_deref().map(parse_gain).transpose()?,
+                pan: pan
+                    .map(|p| Pan::new(p).ok_or("pan must be between -100 and 100"))
+                    .transpose()?,
+                ..Default::default()
+            };
+            ed.update_track(seq, tid, update)?;
+            save(&ed, &path, before)?;
+            println!("track {number} updated");
+        }
+        Cmd::Master { db, normalize } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let g = match (db, normalize) {
+                (Some(db), _) => parse_gain(&db)?,
+                (None, Some(target)) => {
+                    eprintln!("measuring...");
+                    let l = crate::audio::measure_sequence(ed.project(), seq, |_| {})?;
+                    let need = l
+                        .gain_to_reach(target)
+                        .ok_or("the mix is silent, so there is nothing to normalise")?;
+                    let current = ed
+                        .project()
+                        .sequence(seq)
+                        .map_or(0.0, |s| s.master_gain.db());
+                    println!(
+                        "measured {:.1} LUFS, peak {:.1} dBFS",
+                        l.integrated_lufs.unwrap_or(0.0),
+                        l.sample_peak_db
+                    );
+                    if l.sample_peak_db + need > 0.0 {
+                        eprintln!(
+                            "note: the peaks will reach {:+.1} dBFS; render with --limiter soft or lower the target",
+                            l.sample_peak_db + need
+                        );
+                    }
+                    Gain::from_db(f64::from(current + need)).ok_or_else(|| {
+                        format!(
+                            "that needs {:+.1} dB of master gain, more than the +24 dB maximum",
+                            current + need
+                        )
+                    })?
+                }
+                (None, None) => return Err("give a level in dB or --normalize <LUFS>".into()),
+            };
+            ed.set_master_gain(seq, g)?;
+            save(&ed, &path, before)?;
+            println!("master {g}");
         }
         Cmd::Marker { at, name, colour } => {
             let mut ed = load(&path)?;

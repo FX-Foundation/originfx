@@ -1,0 +1,12 @@
+[package]
+name = "originfx-audio-engine"
+description = "OriginFX Audio Engine: gain, pan, fades, soft limiting, loudness and waveform measurement"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "audio_engine"

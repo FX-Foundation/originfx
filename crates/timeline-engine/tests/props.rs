@@ -58,6 +58,13 @@ enum Op {
         pick: usize,
         on: bool,
     },
+    Sound {
+        pick: usize,
+        gain: i32,
+        pan: i16,
+        fi: i64,
+        fo: i64,
+    },
     Transition {
         pick: usize,
         dur: i64,
@@ -108,6 +115,15 @@ fn op() -> impl Strategy<Value = Op> {
             }
         ),
         (0usize..50, any::<bool>()).prop_map(|(pick, on)| Op::Reverse { pick, on }),
+        (0usize..50, -2000i32..1200, -100i16..100, 0i64..30, 0i64..30).prop_map(
+            |(pick, gain, pan, fi, fo)| Op::Sound {
+                pick,
+                gain,
+                pan,
+                fi,
+                fo
+            }
+        ),
         (0usize..50, 1i64..40, 0u8..3, 0u8..9, any::<bool>()).prop_map(
             |(pick, dur, align, kind, remove)| Op::Transition {
                 pick,
@@ -172,6 +188,15 @@ proptest! {
                     None => Ok(()),
                 },
                 Op::Reverse { pick: p, on } => ed.set_reverse(seq, pick(p), on, LinkMode::Follow),
+                Op::Sound { pick: p, gain, pan, fi, fo } => {
+                    let fade = |n: i64| Some(if n == 0 { None } else { Some(Fade { duration: frames(n), curve: FadeCurve::Smooth }) });
+                    ed.set_clip_audio(seq, &[pick(p)], ClipAudio {
+                        gain: Gain::from_db(f64::from(gain) / 100.0),
+                        pan: Pan::new(pan),
+                        fade_in: fade(fi),
+                        fade_out: fade(fo),
+                    }, LinkMode::Follow)
+                }
                 Op::Transition { pick: p, dur, align, kind, remove } => {
                     let names = TransitionKind::all_names();
                     let tr = Transition {

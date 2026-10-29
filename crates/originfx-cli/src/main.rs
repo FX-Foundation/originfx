@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! `originfx`: command line front-end for the OriginFX engines.
 
+mod audio;
 mod png;
 mod render;
 mod timeline;
@@ -35,6 +36,8 @@ enum Command {
     Render(render::RenderArgs),
     /// Save one frame of a timeline project as a PNG.
     RenderFrame(render::FrameArgs),
+    /// Measure loudness (LUFS) and peak of a media file or of a project's mix.
+    Loudness(audio::LoudnessArgs),
     /// Show what is inside a media file.
     Probe {
         file: PathBuf,
@@ -213,6 +216,9 @@ fn run(cmd: Command) -> CliResult {
         }
         Command::RenderFrame(args) => {
             render::run_frame(args)?;
+        }
+        Command::Loudness(args) => {
+            audio::run(args)?;
         }
         Command::Probe { file, json } => {
             let info = probe(&file)?;

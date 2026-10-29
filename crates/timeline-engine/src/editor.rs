@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 
+use crate::audio::{ClipAudio, Gain};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
 use crate::model::{Marker, MarkerColour, NewAsset, Project, SequenceSettings, TrackKind};
@@ -168,6 +169,7 @@ impl Editor {
             // rather than failing the edit that made it impossible.
             let assets = work.assets.clone();
             if let Some(seq) = work.sequences.get_mut(&id) {
+                seq.fit_fades();
                 seq.prune_transitions(&assets);
             }
             let seq = work.sequence(id).ok_or(Error::NoSuchSequence(id))?;
@@ -517,6 +519,30 @@ impl Editor {
                 .get_mut(&seq)
                 .ok_or(Error::NoSuchSequence(seq))?;
             ops::set_transition(s, &assets, clip, transition, links)
+        })
+    }
+
+    // ----- sound ----------------------------------------------------------------
+
+    /// Change the gain, pan or fades of audio clips. A fade longer than its clip is refused.
+    /// With [`LinkMode::Follow`], linked pictures are skipped rather than refused.
+    pub fn set_clip_audio(
+        &mut self,
+        seq: SequenceId,
+        clips: &[ClipId],
+        change: ClipAudio,
+        links: LinkMode,
+    ) -> Result<()> {
+        self.edit_seq("Change sound", seq, |s, _| {
+            ops::set_clip_audio(s, clips, change, links)
+        })
+    }
+
+    /// Change the level of the whole mix of a sequence.
+    pub fn set_master_gain(&mut self, seq: SequenceId, gain: Gain) -> Result<()> {
+        self.edit_seq("Master level", seq, |s, _| {
+            s.master_gain = gain;
+            Ok(())
         })
     }
 
