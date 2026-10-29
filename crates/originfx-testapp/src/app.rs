@@ -10,6 +10,7 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use plugin_engine::Host;
 use timeline_engine::{ClipSpec, Editor, PlaceMode, Project, SequenceId, SequenceSettings, Time};
 
+use crate::audio::Audio;
 use crate::inspector;
 use crate::player::Worker;
 use crate::selfcheck;
@@ -25,6 +26,7 @@ pub struct App {
     editor: Editor,
     seq: Option<SequenceId>,
     worker: Option<Worker>,
+    audio: Audio,
     texture: Option<TextureHandle>,
     plugins: Arc<Host>,
     path_text: String,
@@ -59,6 +61,7 @@ impl App {
             editor: Editor::new("untitled"),
             seq: None,
             worker: None,
+            audio: Audio::new(),
             texture: None,
             plugins: Arc::new(host),
             path_text: String::new(),
@@ -158,6 +161,14 @@ impl App {
             ));
             self.shown_index = -1;
             self.asked_index = -1;
+            self.audio.load(
+                self.editor.project().clone(),
+                seq,
+                Arc::clone(&self.plugins),
+            );
+            if self.playing {
+                self.audio.play(self.pos_secs);
+            }
         }
     }
 
@@ -198,6 +209,7 @@ impl eframe::App for App {
             if self.pos_secs >= dur {
                 self.pos_secs = dur;
                 self.playing = false;
+                self.audio.stop();
             }
             ctx.request_repaint();
         }
@@ -329,6 +341,7 @@ impl eframe::App for App {
                 {
                     if self.playing {
                         self.playing = false;
+                        self.audio.stop();
                     } else {
                         if self.pos_secs >= dur {
                             self.pos_secs = 0.0;
@@ -336,6 +349,7 @@ impl eframe::App for App {
                         self.play_from = self.pos_secs;
                         self.play_start = Instant::now();
                         self.playing = true;
+                        self.audio.play(self.pos_secs);
                     }
                 }
                 let mut p = self.pos_secs;
@@ -347,6 +361,9 @@ impl eframe::App for App {
                     self.pos_secs = p;
                     self.play_from = p;
                     self.play_start = Instant::now();
+                    if self.playing {
+                        self.audio.play(p);
+                    }
                 }
                 ui.monospace(format!(
                     "{} / {}",
@@ -437,6 +454,7 @@ impl eframe::App for App {
                             std::env::consts::OS,
                             std::env::consts::ARCH
                         ));
+                        ui.monospace(format!("Sound: {}", self.audio.device));
                         ui.monospace("Hardware backends:");
                         for b in media_engine::hwaccel::probe_backends() {
                             match b.error {

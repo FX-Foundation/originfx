@@ -2,6 +2,7 @@
 //! OriginFX test app: a small window to play, poke and check everything the engines do.
 
 mod app;
+mod audio;
 mod inspector;
 mod player;
 mod selfcheck;
