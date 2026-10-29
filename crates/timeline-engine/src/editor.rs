@@ -649,6 +649,45 @@ impl Editor {
         })
     }
 
+    /// Set the fixed value of a picture setting: opacity, x, y, scale-x, scale-y, rotation,
+    /// crop-*, or a mask value. Refused while the value is animated.
+    pub fn set_look_value(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        param: Param,
+        value: f64,
+    ) -> Result<()> {
+        self.edit_seq("Picture setting", seq, |s, _| {
+            ops::set_look_value(s, clip, param, value)
+        })
+    }
+
+    /// Choose how a picture clip's colour combines with what is beneath.
+    pub fn set_blend_mode(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        mode: crate::compositing::BlendMode,
+    ) -> Result<()> {
+        self.edit_seq("Blend mode", seq, |s, _| ops::set_blend_mode(s, clip, mode))
+    }
+
+    /// Add a mask to a picture clip, or change the shape and inversion of its mask.
+    pub fn set_mask(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        shape: crate::compositing::MaskShape,
+        invert: bool,
+    ) -> Result<()> {
+        self.edit_seq("Mask", seq, |s, _| ops::set_mask(s, clip, shape, invert))
+    }
+
+    pub fn remove_mask(&mut self, seq: SequenceId, clip: ClipId) -> Result<()> {
+        self.edit_seq("Remove mask", seq, |s, _| ops::remove_mask(s, clip))
+    }
+
     /// Set the fixed value of an effect setting (by name; see `EffectKind::params`). Refused
     /// while the setting is animated.
     pub fn set_effect_value(

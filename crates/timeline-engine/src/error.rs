@@ -56,8 +56,10 @@ pub enum Error {
     },
     #[error("effect: {0}")]
     BadEffect(String),
-    #[error("{0} is not a picture clip, so it has no effects")]
+    #[error("{0} is not a picture clip, so it has no effects or picture settings")]
     NotPicture(ClipId),
+    #[error("picture setting: {0}")]
+    BadLook(String),
     #[error("keyframe: {0}")]
     BadKeyframe(String),
     #[error("{0} is still used by a clip")]

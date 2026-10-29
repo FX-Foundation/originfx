@@ -24,6 +24,7 @@ thiserror = "2"
 originfx-audio-engine = { path = "../audio-engine" }
 originfx-keyframe-engine = { path = "../keyframe-engine" }
 originfx-effects-engine = { path = "../effects-engine" }
+originfx-compositing-engine = { path = "../compositing-engine" }
 originfx-media-engine = { path = "../media-engine", optional = true }
 
 [dev-dependencies]

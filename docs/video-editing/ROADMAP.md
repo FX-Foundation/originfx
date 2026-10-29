@@ -35,6 +35,6 @@
 |---|---|
 | Animated transition curves | Keyframe (speed ramps are done) |
 | Optical-flow slow motion, blurs, glows | Effects |
-| Opacity, blend modes, transforms | Compositing |
+| Opacity, blend modes, transforms | Done in the [Compositing Engine](../compositing-engine/README.md) |
 | Pitch shifting, sound effects | Audio (see its [roadmap](../audio-engine/ROADMAP.md)) |
 | Custom transitions | Plugin |

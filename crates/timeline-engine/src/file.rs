@@ -5,6 +5,7 @@
 //! crash never leaves half a project. Loading checks every rule of [`Project::validate`],
 //! so a hand-edited or damaged file is refused with a clear error rather than loaded broken.
 
+use crate::compositing::{BlendMode, Mask, MaskShape, Transform};
 use std::path::{Path, PathBuf};
 
 use im::{OrdMap, Vector};
@@ -20,7 +21,7 @@ use crate::retime::{Alignment, Speed, Transition, TransitionKind};
 use crate::time::{FrameRate, Time};
 
 /// The file format version this build writes and reads.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
@@ -93,6 +94,97 @@ struct ClipDto {
     /// Added in format version 5: the effect stack.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     effects: Vec<EffectDto>,
+    /// Added in format version 6: opacity, position, scale, rotation and crop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transform: Option<TransformDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mask: Option<MaskDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct TransformDto {
+    opacity: f64,
+    x: f64,
+    y: f64,
+    scale_x: f64,
+    scale_y: f64,
+    rotation: f64,
+    crop: [f64; 4],
+}
+
+#[derive(Serialize, Deserialize)]
+struct MaskDto {
+    shape: String,
+    invert: bool,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    feather: f64,
+}
+
+fn look_out(c: &Clip) -> (Option<TransformDto>, Option<String>, Option<MaskDto>) {
+    let t = c.transform;
+    (
+        (!t.is_default()).then_some(TransformDto {
+            opacity: t.opacity,
+            x: t.x,
+            y: t.y,
+            scale_x: t.scale_x,
+            scale_y: t.scale_y,
+            rotation: t.rotation,
+            crop: [t.crop_left, t.crop_right, t.crop_top, t.crop_bottom],
+        }),
+        (c.blend != BlendMode::Normal).then(|| c.blend.name().to_string()),
+        c.mask.map(|m| MaskDto {
+            shape: m.shape.name().to_string(),
+            invert: m.invert,
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+            feather: m.feather,
+        }),
+    )
+}
+
+type LookIn = (Transform, BlendMode, Option<Mask>);
+
+fn look_in(t: Option<TransformDto>, b: Option<String>, m: Option<MaskDto>) -> Result<LookIn> {
+    let t = t.map_or_else(Transform::default, |t| Transform {
+        opacity: t.opacity,
+        x: t.x,
+        y: t.y,
+        scale_x: t.scale_x,
+        scale_y: t.scale_y,
+        rotation: t.rotation,
+        crop_left: t.crop[0],
+        crop_right: t.crop[1],
+        crop_top: t.crop[2],
+        crop_bottom: t.crop[3],
+    });
+    let b = match b {
+        None => BlendMode::Normal,
+        Some(n) => {
+            BlendMode::parse(&n).ok_or_else(|| Error::File(format!("unknown blend mode {n:?}")))?
+        }
+    };
+    let m = match m {
+        None => None,
+        Some(m) => Some(Mask {
+            shape: MaskShape::parse(&m.shape)
+                .ok_or_else(|| Error::File(format!("unknown mask shape {:?}", m.shape)))?,
+            invert: m.invert,
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+            feather: m.feather,
+        }),
+    };
+    Ok((t, b, m))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -386,6 +478,9 @@ fn track_out(t: &Track) -> TrackDto {
                 fade_out: fade_out(c.fade_out),
                 anim: anim_out(&c.anim),
                 effects: effects_out(&c.effects),
+                transform: look_out(c).0,
+                blend: look_out(c).1,
+                mask: look_out(c).2,
             })
             .collect(),
     }
@@ -400,6 +495,7 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
     t.pan = pan_in(d.pan)?;
     t.anim = anim_in(d.anim)?;
     for c in d.clips {
+        let (transform, blend, mask) = look_in(c.transform, c.blend, c.mask)?;
         let clip = Clip {
             id: ClipId(c.id),
             asset: AssetId(c.asset),
@@ -430,6 +526,9 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
             fade_out: fade_in_dto(c.fade_out)?,
             anim: anim_in(c.anim)?,
             effects: effects_in(c.effects)?,
+            transform,
+            blend,
+            mask,
         };
         t.items.insert(clip.start, clip);
     }

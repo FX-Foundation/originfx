@@ -25,16 +25,111 @@ pub enum Param {
     Pan,
     /// Playback speed as a ratio (1 is normal), 0.01 to 100. (Clips.) This is a *speed ramp*.
     Speed,
+    /// Picture clips: how solid the layer is, percent.
+    Opacity,
+    /// Picture clips: move right, percent of the frame width.
+    PositionX,
+    /// Picture clips: move down, percent of the frame height.
+    PositionY,
+    /// Picture clips: horizontal size, percent.
+    ScaleX,
+    /// Picture clips: vertical size, percent.
+    ScaleY,
+    /// Picture clips: clockwise turn in degrees.
+    Rotation,
+    /// Picture clips: crop from the left, percent of the width.
+    CropLeft,
+    CropRight,
+    CropTop,
+    CropBottom,
+    /// Picture clips with a mask: the mask's centre, percent of the frame.
+    MaskX,
+    MaskY,
+    /// The mask's size, percent of the frame.
+    MaskWidth,
+    MaskHeight,
+    /// The mask's soft edge, percent of the frame height.
+    MaskFeather,
 }
 
 impl Param {
-    pub const ALL: [Param; 3] = [Param::Gain, Param::Pan, Param::Speed];
+    pub const ALL: [Param; 18] = [
+        Param::Gain,
+        Param::Pan,
+        Param::Speed,
+        Param::Opacity,
+        Param::PositionX,
+        Param::PositionY,
+        Param::ScaleX,
+        Param::ScaleY,
+        Param::Rotation,
+        Param::CropLeft,
+        Param::CropRight,
+        Param::CropTop,
+        Param::CropBottom,
+        Param::MaskX,
+        Param::MaskY,
+        Param::MaskWidth,
+        Param::MaskHeight,
+        Param::MaskFeather,
+    ];
+
+    /// What an audio clip can animate.
+    pub const AUDIO: [Param; 3] = [Param::Gain, Param::Pan, Param::Speed];
+
+    /// What a picture clip can animate.
+    pub const PICTURE: [Param; 16] = [
+        Param::Speed,
+        Param::Opacity,
+        Param::PositionX,
+        Param::PositionY,
+        Param::ScaleX,
+        Param::ScaleY,
+        Param::Rotation,
+        Param::CropLeft,
+        Param::CropRight,
+        Param::CropTop,
+        Param::CropBottom,
+        Param::MaskX,
+        Param::MaskY,
+        Param::MaskWidth,
+        Param::MaskHeight,
+        Param::MaskFeather,
+    ];
+
+    /// True for the look of a picture clip (everything except gain, pan and speed).
+    pub fn is_look(self) -> bool {
+        !matches!(self, Param::Gain | Param::Pan | Param::Speed)
+    }
+
+    /// True for the parameters of a mask.
+    pub fn is_mask(self) -> bool {
+        matches!(
+            self,
+            Param::MaskX | Param::MaskY | Param::MaskWidth | Param::MaskHeight | Param::MaskFeather
+        )
+    }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Param::Gain => "gain",
             Param::Pan => "pan",
             Param::Speed => "speed",
+            Param::Opacity => "opacity",
+            Param::PositionX => "x",
+            Param::PositionY => "y",
+            Param::ScaleX => "scale-x",
+            Param::ScaleY => "scale-y",
+            Param::Rotation => "rotation",
+            Param::CropLeft => "crop-left",
+            Param::CropRight => "crop-right",
+            Param::CropTop => "crop-top",
+            Param::CropBottom => "crop-bottom",
+            Param::MaskX => "mask-x",
+            Param::MaskY => "mask-y",
+            Param::MaskWidth => "mask-width",
+            Param::MaskHeight => "mask-height",
+            Param::MaskFeather => "mask-feather",
         }
     }
 
@@ -48,6 +143,14 @@ impl Param {
             Param::Gain => (-120.0, 24.0),
             Param::Pan => (-100.0, 100.0),
             Param::Speed => (MIN_SPEED, MAX_SPEED),
+            Param::Opacity => (0.0, 100.0),
+            Param::PositionX | Param::PositionY => (-300.0, 300.0),
+            Param::ScaleX | Param::ScaleY => (0.0, 1000.0),
+            Param::Rotation => (-3600.0, 3600.0),
+            Param::CropLeft | Param::CropRight | Param::CropTop | Param::CropBottom => (0.0, 100.0),
+            Param::MaskX | Param::MaskY => (-100.0, 200.0),
+            Param::MaskWidth | Param::MaskHeight => (0.0, 300.0),
+            Param::MaskFeather => (0.0, 50.0),
         }
     }
 
@@ -56,6 +159,8 @@ impl Param {
             Param::Gain => "dB",
             Param::Pan => "%",
             Param::Speed => "x",
+            Param::Rotation => "deg",
+            _ => "%",
         }
     }
 

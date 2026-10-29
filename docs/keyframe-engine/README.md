@@ -21,7 +21,7 @@ edits that animate it, belong to the [Timeline Engine](../timeline-engine/README
 | Sequence | master `gain` | dB | -120 to +24 |
 
 Effect settings are animated with the same curves (see the [Effects Engine](../effects-engine/README.md)). Opacity,
-position and scale arrive with the Compositing engine and will use the same curves and edits.
+position, scale, rotation, crop and mask values use the same curves (see the [Compositing Engine](../compositing-engine/README.md)).
 
 A value with a curve is **animated**: the curve replaces the fixed value. While a value is animated its fixed
 field (`speed`, `gain`, `pan`) is ignored, and changing it is refused with a clear message until the curve is

@@ -17,6 +17,7 @@ originfx-media-engine = { path = "../media-engine" }
 thiserror = "2"
 originfx-audio-engine = { path = "../audio-engine" }
 originfx-effects-engine = { path = "../effects-engine" }
+originfx-compositing-engine = { path = "../compositing-engine" }
 
 [dev-dependencies]
 tempfile = "3"

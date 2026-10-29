@@ -77,4 +77,13 @@ Each engine has its own folder with the same set of pages.
 | [DECISIONS.md](effects-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
 | [TRY_IT.md](effects-engine/TRY_IT.md) | Checklist for trying it on your own machine |
 
+### Compositing Engine (done)
+
+| Document | What it is |
+|---|---|
+| [README.md](compositing-engine/README.md) | Full guide: opacity, blend modes, transform, crop, masks, command line |
+| [ROADMAP.md](compositing-engine/ROADMAP.md) | What is next and what belongs to other engines |
+| [DECISIONS.md](compositing-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
+| [TRY_IT.md](compositing-engine/TRY_IT.md) | Checklist for trying it on your own machine |
+
 The other engines get their own folders as they are built.
