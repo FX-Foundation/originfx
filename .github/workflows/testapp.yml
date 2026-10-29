@@ -1,0 +1,72 @@
+name: Test app
+
+# Builds the one-file test app for Linux and Windows. Run it by hand from the Actions tab
+# ("Run workflow"), or it runs on every push to the test-app branch.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/test-app]
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libswresample-dev libavfilter-dev libavdevice-dev \
+            libx264-dev libx265-dev clang libclang-dev pkg-config libasound2-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            packaging/launcher
+      - name: Build
+        run: |
+          set +e
+          ./packaging/linux.sh 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -iE 'error|panick|failed|not found|cannot|unable' build.log | head -9 \
+              | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit "$status"
+      - name: Self-check (no window)
+        run: xvfb-run -a ./dist/OriginFX-TestApp-linux-x86_64 --selfcheck 2>&1 | tail -25
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OriginFX-TestApp-linux
+          path: dist/OriginFX-TestApp-linux-x86_64
+          retention-days: 30
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            packaging/launcher
+      - name: Build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./packaging/windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OriginFX-TestApp-windows
+          path: dist/OriginFX-TestApp-windows-x86_64.exe
+          retention-days: 30

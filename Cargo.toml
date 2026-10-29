@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["packaging/launcher"]
 members = ["crates/media-engine", "crates/timeline-engine", "crates/audio-engine", "crates/keyframe-engine", "crates/effects-engine", "crates/compositing-engine", "crates/motion-graphics-engine", "crates/plugin-engine", "crates/originfx-testapp", "crates/render-engine", "crates/originfx-cli"]
 
 [workspace.package]

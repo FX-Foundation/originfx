@@ -4,3 +4,10 @@
 *.mkv
 *.mov
 *.webm
+dist/
+payload.zip
+build.log
+stage/
+ffmpeg-dl/
+ffmpeg-x/
+packaging/launcher/target/

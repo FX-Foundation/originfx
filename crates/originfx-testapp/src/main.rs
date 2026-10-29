@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! OriginFX test app: a small window to play, poke and check everything the engines do.
 
+// No console window behind the app on Windows (use the window's Self-check tab for reports).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
+mod audio;
+mod inspector;
 mod player;
 mod selfcheck;
 
@@ -21,6 +26,12 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "OriginFX test app",
         options,
-        Box::new(|_cc| Ok(Box::new(app::App::new()))),
+        Box::new(move |_cc| {
+            let mut a = app::App::new();
+            if let Some(p) = args.first() {
+                a.open_path(p.into());
+            }
+            Ok(Box::new(a))
+        }),
     )
 }

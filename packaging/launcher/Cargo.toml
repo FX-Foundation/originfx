@@ -1,0 +1,19 @@
+[package]
+name = "originfx-launcher"
+description = "One-file launcher: carries the OriginFX test app and its libraries, runs it from a temporary folder, then deletes everything"
+version = "0.1.0"
+edition = "2021"
+publish = false
+authors = ["FX Foundation"]
+license = "GPL-3.0-or-later"
+
+# Not part of the main workspace: it needs a payload built first (see packaging/).
+[workspace]
+
+[dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

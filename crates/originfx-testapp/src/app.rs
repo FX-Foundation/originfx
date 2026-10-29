@@ -10,11 +10,14 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use plugin_engine::Host;
 use timeline_engine::{ClipSpec, Editor, PlaceMode, Project, SequenceId, SequenceSettings, Time};
 
+use crate::audio::Audio;
+use crate::inspector;
 use crate::player::Worker;
 use crate::selfcheck;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
+    Inspector,
     SelfCheck,
     Info,
 }
@@ -23,6 +26,7 @@ pub struct App {
     editor: Editor,
     seq: Option<SequenceId>,
     worker: Option<Worker>,
+    audio: Audio,
     texture: Option<TextureHandle>,
     plugins: Arc<Host>,
     path_text: String,
@@ -43,6 +47,8 @@ pub struct App {
     report: String,
     check_rx: Option<Receiver<String>>,
     sample: Option<PathBuf>,
+    project_path: Option<PathBuf>,
+    note: String,
 }
 
 impl App {
@@ -55,6 +61,7 @@ impl App {
             editor: Editor::new("untitled"),
             seq: None,
             worker: None,
+            audio: Audio::new(),
             texture: None,
             plugins: Arc::new(host),
             path_text: String::new(),
@@ -69,10 +76,21 @@ impl App {
             shown_count: 0,
             fps_since: Instant::now(),
             fps: 0.0,
-            tab: Tab::SelfCheck,
+            tab: Tab::Inspector,
             report: String::new(),
             check_rx: None,
             sample: None,
+            project_path: None,
+            note: String::new(),
+        }
+    }
+
+    /// Open a project or a media file, going by the file name.
+    pub fn open_path(&mut self, p: PathBuf) {
+        if p.extension().is_some_and(|e| e == "originfx") {
+            self.open_project(p);
+        } else {
+            self.open_media(p);
         }
     }
 
@@ -143,6 +161,14 @@ impl App {
             ));
             self.shown_index = -1;
             self.asked_index = -1;
+            self.audio.load(
+                self.editor.project().clone(),
+                seq,
+                Arc::clone(&self.plugins),
+            );
+            if self.playing {
+                self.audio.play(self.pos_secs);
+            }
         }
     }
 
@@ -183,6 +209,7 @@ impl eframe::App for App {
             if self.pos_secs >= dur {
                 self.pos_secs = dur;
                 self.playing = false;
+                self.audio.stop();
             }
             ctx.request_repaint();
         }
@@ -261,6 +288,37 @@ impl eframe::App for App {
                     }
                 }
                 ui.separator();
+                if ui
+                    .add_enabled(self.editor.can_undo(), egui::Button::new("Undo"))
+                    .clicked()
+                {
+                    let _ = self.editor.undo();
+                    self.refresh_worker();
+                }
+                if ui
+                    .add_enabled(self.editor.can_redo(), egui::Button::new("Redo"))
+                    .clicked()
+                {
+                    let _ = self.editor.redo();
+                    self.refresh_worker();
+                }
+                if ui
+                    .add_enabled(self.seq.is_some(), egui::Button::new("Save project…"))
+                    .clicked()
+                {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("OriginFX project", &["originfx"])
+                        .set_file_name("test.originfx")
+                        .save_file()
+                    {
+                        self.status = match self.editor.project().save(&p) {
+                            Ok(()) => format!("Saved {}", p.display()),
+                            Err(e) => format!("Could not save: {e}"),
+                        };
+                        self.project_path = Some(p);
+                    }
+                }
+                ui.separator();
                 ui.label("or path:");
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.path_text)
@@ -268,12 +326,7 @@ impl eframe::App for App {
                         .hint_text("/path/to/video-or-project"),
                 );
                 if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    let p = PathBuf::from(self.path_text.trim());
-                    if p.extension().is_some_and(|e| e == "originfx") {
-                        self.open_project(p);
-                    } else {
-                        self.open_media(p);
-                    }
+                    self.open_path(PathBuf::from(self.path_text.trim()));
                 }
             });
             ui.label(&self.status);
@@ -288,6 +341,7 @@ impl eframe::App for App {
                 {
                     if self.playing {
                         self.playing = false;
+                        self.audio.stop();
                     } else {
                         if self.pos_secs >= dur {
                             self.pos_secs = 0.0;
@@ -295,6 +349,7 @@ impl eframe::App for App {
                         self.play_from = self.pos_secs;
                         self.play_start = Instant::now();
                         self.playing = true;
+                        self.audio.play(self.pos_secs);
                     }
                 }
                 let mut p = self.pos_secs;
@@ -306,6 +361,9 @@ impl eframe::App for App {
                     self.pos_secs = p;
                     self.play_from = p;
                     self.play_start = Instant::now();
+                    if self.playing {
+                        self.audio.play(p);
+                    }
                 }
                 ui.monospace(format!(
                     "{} / {}",
@@ -322,11 +380,39 @@ impl eframe::App for App {
 
         egui::Panel::right("side").min_size(380.0).show(root, |ui| {
             ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Inspector, "Inspector");
                 ui.selectable_value(&mut self.tab, Tab::SelfCheck, "Self-check");
                 ui.selectable_value(&mut self.tab, Tab::Info, "Hardware / info");
             });
             ui.separator();
             match self.tab {
+                Tab::Inspector => {
+                    egui::ScrollArea::vertical().show(ui, |ui| match self.seq {
+                        Some(seq) => {
+                            let t = Time::from_secs_f64(self.pos_secs.min((dur - 0.001).max(0.0)));
+                            let out = inspector::show(
+                                ui,
+                                &mut self.editor,
+                                seq,
+                                t,
+                                &self.plugins,
+                                &mut self.note,
+                            );
+                            if let Some(m) = out.message {
+                                self.status = format!("Refused: {m}");
+                            }
+                            if out.changed {
+                                self.refresh_worker();
+                            }
+                            if !self.note.is_empty() {
+                                ui.label(&self.note);
+                            }
+                        }
+                        None => {
+                            ui.label("Open a video or a project first.");
+                        }
+                    });
+                }
                 Tab::SelfCheck => {
                     ui.horizontal(|ui| {
                         let running = self.check_rx.is_some();
@@ -368,6 +454,7 @@ impl eframe::App for App {
                             std::env::consts::OS,
                             std::env::consts::ARCH
                         ));
+                        ui.monospace(format!("Sound: {}", self.audio.device));
                         ui.monospace("Hardware backends:");
                         for b in media_engine::hwaccel::probe_backends() {
                             match b.error {
