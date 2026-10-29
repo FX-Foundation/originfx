@@ -57,9 +57,34 @@ pub fn apply_gain_pan(samples: &mut [f32], gain: f32, pan: f32) {
     }
 }
 
+/// Apply a gain and pan that change from one sample frame to the next. `at(i)` gives the linear
+/// gain and the pan (-1 to 1) for frame `i` of `samples`.
+pub fn apply_gain_pan_with(samples: &mut [f32], mut at: impl FnMut(usize) -> (f32, f32)) {
+    for (i, frame) in samples.chunks_exact_mut(2).enumerate() {
+        let (gain, pan) = at(i);
+        let (l, r) = pan_gains(pan);
+        frame[0] *= l * gain;
+        frame[1] *= r * gain;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn per_frame_gain_and_pan_match_the_fixed_version_when_constant() {
+        let src: Vec<f32> = (0..20).map(|i| (i as f32 * 0.37).sin()).collect();
+        let (mut a, mut b) = (src.clone(), src.clone());
+        apply_gain_pan(&mut a, 0.5, -0.3);
+        apply_gain_pan_with(&mut b, |_| (0.5, -0.3));
+        assert_eq!(a, b);
+        // A gain that ramps up scales later frames more.
+        let mut c = vec![1.0f32; 8];
+        apply_gain_pan_with(&mut c, |i| (i as f32 / 3.0, 0.0));
+        assert_eq!(c[0], 0.0);
+        assert!((c[6] - 1.0).abs() < 1e-6 && c[4] > c[2] && c[2] > c[0]);
+    }
 
     #[test]
     fn decibels_round_trip() {

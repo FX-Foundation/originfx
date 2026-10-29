@@ -1,0 +1,12 @@
+[package]
+name = "originfx-keyframe-engine"
+description = "OriginFX Keyframe Engine: values that change over time (curves, interpolation, integrals)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "keyframe_engine"

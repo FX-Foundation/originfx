@@ -19,7 +19,7 @@
 2. **Equaliser** (parametric, high and low pass), per clip and per track.
 3. **Compressor, gate, de-esser, and a look-ahead true-peak limiter** for the master.
 4. **Noise reduction and hum removal.**
-5. **Keyframed volume and pan** (rubber-band lines), from the Keyframe engine, and automatic ducking (music under voice).
+5. **Automatic ducking** (music under voice). Keyframed volume and pan (rubber-band lines) are done: see the [Keyframe Engine](../keyframe-engine/README.md).
 6. **Short-term loudness, loudness range (LRA) and true peak** meters, and a live meter for playback.
 7. **Surround and other channel layouts**, with correct loudness weighting and downmix.
 8. **Pitch-preserving time stretch** for clips with a changed speed (today pitch follows speed like a tape).
@@ -31,7 +31,7 @@
 
 | Item | Engine |
 |---|---|
-| Animated volume, pan and effect parameters | Keyframe |
+| Animated effect parameters | Keyframe (volume and pan are done) |
 | Effects as plug-ins (VST/CLAP hosting, custom DSP) | Plugin |
 | Sound for generated graphics and titles | Motion Graphics |
 | Playing sound live, with sync to picture | the player, once it exists |

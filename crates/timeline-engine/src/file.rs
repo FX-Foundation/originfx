@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use im::{OrdMap, Vector};
 use serde::{Deserialize, Serialize};
 
+use crate::animation::{Animation, Curve, Interp, Key, Param};
 use crate::audio::{Fade, FadeCurve, Gain, Pan};
 use crate::error::{Error, Result};
 use crate::ids::*;
@@ -18,7 +19,7 @@ use crate::retime::{Alignment, Speed, Transition, TransitionKind};
 use crate::time::{FrameRate, Time};
 
 /// The file format version this build writes and reads.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
@@ -85,6 +86,68 @@ struct ClipDto {
     fade_in: Option<FadeDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fade_out: Option<FadeDto>,
+    /// Added in format version 4: keyframed values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    anim: Vec<CurveDto>,
+}
+
+/// One animated value: its name and keys.
+#[derive(Serialize, Deserialize)]
+struct CurveDto {
+    param: String,
+    keys: Vec<KeyDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct KeyDto {
+    t: i64,
+    v: f64,
+    interp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tangent: Option<f64>,
+}
+
+fn anim_out(a: &Animation) -> Vec<CurveDto> {
+    a.iter()
+        .map(|(p, c)| CurveDto {
+            param: p.as_str().to_string(),
+            keys: c
+                .keys()
+                .iter()
+                .map(|k| KeyDto {
+                    t: k.t,
+                    v: k.value,
+                    interp: k.interp.as_str().to_string(),
+                    tangent: k.tangent,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn anim_in(list: Vec<CurveDto>) -> Result<Animation> {
+    let mut a = Animation::default();
+    for c in list {
+        let param = Param::parse(&c.param)
+            .ok_or_else(|| Error::File(format!("unknown animated value {:?}", c.param)))?;
+        if a.is_animated(param) {
+            return Err(Error::File(format!("{param} is animated twice")));
+        }
+        let mut keys = Vec::new();
+        for k in c.keys {
+            let interp = Interp::parse(&k.interp)
+                .ok_or_else(|| Error::File(format!("unknown interpolation {:?}", k.interp)))?;
+            keys.push(Key {
+                t: k.t,
+                value: k.v,
+                interp,
+                tangent: k.tangent,
+            });
+        }
+        let curve = Curve::from_keys(keys).map_err(|e| Error::File(format!("{param}: {e}")))?;
+        a.set(param, curve);
+    }
+    Ok(a)
 }
 
 fn is_zero(v: &i32) -> bool {
@@ -152,6 +215,8 @@ struct TrackDto {
     gain_cb: i32,
     #[serde(default, skip_serializing_if = "is_zero_i16")]
     pan: i16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    anim: Vec<CurveDto>,
     clips: Vec<ClipDto>,
 }
 
@@ -177,6 +242,8 @@ struct SequenceDto {
     timecode_start: i64,
     #[serde(default, skip_serializing_if = "is_zero")]
     master_gain_cb: i32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    master_anim: Vec<CurveDto>,
     video: Vec<TrackDto>,
     audio: Vec<TrackDto>,
     markers: Vec<MarkerDto>,
@@ -199,6 +266,7 @@ fn track_out(t: &Track) -> TrackDto {
         solo: t.solo,
         gain_cb: t.gain.centibels(),
         pan: t.pan.percent(),
+        anim: anim_out(&t.anim),
         clips: t
             .clips()
             .map(|c| ClipDto {
@@ -223,6 +291,7 @@ fn track_out(t: &Track) -> TrackDto {
                 pan: c.pan.percent(),
                 fade_in: fade_out(c.fade_in),
                 fade_out: fade_out(c.fade_out),
+                anim: anim_out(&c.anim),
             })
             .collect(),
     }
@@ -235,6 +304,7 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
     t.solo = d.solo;
     t.gain = gain_in(d.gain_cb)?;
     t.pan = pan_in(d.pan)?;
+    t.anim = anim_in(d.anim)?;
     for c in d.clips {
         let clip = Clip {
             id: ClipId(c.id),
@@ -264,6 +334,7 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
             pan: pan_in(c.pan)?,
             fade_in: fade_in_dto(c.fade_in)?,
             fade_out: fade_in_dto(c.fade_out)?,
+            anim: anim_in(c.anim)?,
         };
         t.items.insert(clip.start, clip);
     }
@@ -316,6 +387,7 @@ fn to_dto(p: &Project) -> FileDto {
                 drop_frame: s.drop_frame,
                 timecode_start: s.timecode_start.ticks(),
                 master_gain_cb: s.master_gain.centibels(),
+                master_anim: anim_out(&s.master_anim),
                 video: s.video_tracks().iter().map(track_out).collect(),
                 audio: s.audio_tracks().iter().map(track_out).collect(),
                 markers: s
@@ -391,6 +463,7 @@ fn from_dto(d: FileDto) -> Result<Project> {
         };
         let mut seq = Sequence::new(id, settings);
         seq.master_gain = gain_in(s.master_gain_cb)?;
+        seq.master_anim = anim_in(s.master_anim)?;
         seq.video = s
             .video
             .into_iter()

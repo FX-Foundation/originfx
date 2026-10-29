@@ -47,6 +47,10 @@ pub enum Error {
     NotAudio(ClipId),
     #[error("the fades of {clip} are longer than the clip")]
     FadesTooLong { clip: ClipId },
+    #[error("{what} is animated; clear its keyframes before setting a fixed value")]
+    Animated { what: String },
+    #[error("keyframe: {0}")]
+    BadKeyframe(String),
     #[error("{0} is still used by a clip")]
     AssetInUse(AssetId),
     #[error("a still image needs a duration")]

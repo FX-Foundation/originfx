@@ -31,6 +31,6 @@
 |---|---|
 | Opacity, blend modes, transforms, masks | Compositing |
 | Sound effects (EQ, compression), stateful processing | Audio (see its [roadmap](../audio-engine/ROADMAP.md)); levels, pan, fades and limiting are done |
-| Animated values over time | Keyframe |
+| Animated position, scale and opacity | Compositing, using the [Keyframe Engine](../keyframe-engine/README.md) curves (gain, pan and speed are done) |
 | Blur, colour grading and other effects | Effects |
 | Text, shapes, animation | Motion Graphics |

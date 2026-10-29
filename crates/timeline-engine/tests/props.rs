@@ -72,6 +72,29 @@ enum Op {
         kind: u8,
         remove: bool,
     },
+    Key {
+        pick: usize,
+        param: u8,
+        offset: i64,
+        value: i32,
+        interp: u8,
+    },
+    KeyTrack {
+        track: usize,
+        param: u8,
+        at: i64,
+        value: i32,
+    },
+    KeyMaster {
+        at: i64,
+        value: i32,
+    },
+    Unkey {
+        pick: usize,
+        param: u8,
+        clear: bool,
+        offset: i64,
+    },
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -133,6 +156,32 @@ fn op() -> impl Strategy<Value = Op> {
                 remove
             }
         ),
+        (0usize..50, 0u8..3, 0i64..80, -1200i32..2400, 0u8..3).prop_map(
+            |(pick, param, offset, value, interp)| Op::Key {
+                pick,
+                param,
+                offset,
+                value,
+                interp
+            }
+        ),
+        (0usize..4, 0u8..2, 0i64..300, -12000i32..2400).prop_map(|(track, param, at, value)| {
+            Op::KeyTrack {
+                track,
+                param,
+                at,
+                value,
+            }
+        }),
+        (0i64..300, -12000i32..2400).prop_map(|(at, value)| Op::KeyMaster { at, value }),
+        (0usize..50, 0u8..3, any::<bool>(), 0i64..80).prop_map(|(pick, param, clear, offset)| {
+            Op::Unkey {
+                pick,
+                param,
+                clear,
+                offset,
+            }
+        }),
     ]
 }
 
@@ -205,6 +254,31 @@ proptest! {
                         alignment: [Alignment::Center, Alignment::StartAtCut, Alignment::EndAtCut][align as usize],
                     };
                     ed.set_transition(seq, pick(p), if remove { None } else { Some(tr) }, LinkMode::Follow)
+                }
+                Op::Key { pick: p, param, offset, value, interp } => {
+                    let id = pick(p);
+                    let at = before.sequence(seq).unwrap().find_clip(id).map_or(Time::ZERO, |(_, c)| c.start) + frames(offset);
+                    let param = Param::ALL[param as usize];
+                    // Speeds are kept near 1 so ramps are plausible; the rest use the full scale.
+                    let value = if param == Param::Speed { 0.25 + f64::from(value.rem_euclid(400)) / 100.0 } else if param == Param::Pan { f64::from(value % 101) } else { f64::from(value) / 100.0 };
+                    let interp = [Interp::Hold, Interp::Linear, Interp::Smooth][interp as usize];
+                    ed.set_keyframe(seq, Target::Clip(id), param, at, value, interp, LinkMode::Follow)
+                }
+                Op::KeyTrack { track, param, at, value } => {
+                    let param = [Param::Gain, Param::Pan][param as usize];
+                    let value = if param == Param::Pan { f64::from(value % 101) } else { f64::from(value) / 100.0 };
+                    ed.set_keyframe(seq, Target::Track(tracks[track]), param, frames(at), value, Interp::Smooth, LinkMode::Follow)
+                }
+                Op::KeyMaster { at, value } => ed.set_keyframe(seq, Target::Master, Param::Gain, frames(at), f64::from(value) / 100.0, Interp::Linear, LinkMode::Follow),
+                Op::Unkey { pick: p, param, clear, offset } => {
+                    let id = pick(p);
+                    let param = Param::ALL[param as usize];
+                    if clear {
+                        ed.clear_animation(seq, Target::Clip(id), param, LinkMode::Follow)
+                    } else {
+                        let at = before.sequence(seq).unwrap().find_clip(id).map_or(Time::ZERO, |(_, c)| c.start) + frames(offset);
+                        ed.remove_keyframe(seq, Target::Clip(id), param, at, LinkMode::Follow)
+                    }
                 }
                 Op::RangeDelete { a, b } => match TimeRange::new(frames(a.min(b)), frames(a.max(b))) {
                     Some(range) => ed.ripple_delete_range(seq, range, None),
