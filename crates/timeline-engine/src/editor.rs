@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use crate::animation::{Interp, Param, Target};
 use crate::audio::{ClipAudio, Gain};
+use crate::effects::{EffectId, EffectKind};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
 use crate::model::{Marker, MarkerColour, NewAsset, Project, SequenceSettings, TrackKind};
@@ -598,6 +599,110 @@ impl Editor {
     ) -> Result<()> {
         self.edit_seq("Clear keyframes", seq, |s, _| {
             ops::clear_animation(s, target, param, links)
+        })
+    }
+
+    // ----- effects ---------------------------------------------------------------
+
+    /// Add an effect to a picture clip at `index` in its stack (the end if `None`), with its
+    /// default settings. Returns the effect's id, which is unique within the clip.
+    pub fn add_effect(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        kind: EffectKind,
+        index: Option<usize>,
+    ) -> Result<EffectId> {
+        self.edit_seq("Add effect", seq, |s, _| {
+            ops::add_effect(s, clip, kind, index)
+        })
+    }
+
+    pub fn remove_effect(&mut self, seq: SequenceId, clip: ClipId, effect: EffectId) -> Result<()> {
+        self.edit_seq("Remove effect", seq, |s, _| {
+            ops::remove_effect(s, clip, effect)
+        })
+    }
+
+    /// Move an effect to position `to` in the clip's stack (0 is applied first).
+    pub fn move_effect(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        effect: EffectId,
+        to: usize,
+    ) -> Result<()> {
+        self.edit_seq("Move effect", seq, |s, _| {
+            ops::move_effect(s, clip, effect, to)
+        })
+    }
+
+    pub fn set_effect_enabled(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        effect: EffectId,
+        enabled: bool,
+    ) -> Result<()> {
+        self.edit_seq("Enable effect", seq, |s, _| {
+            ops::set_effect_enabled(s, clip, effect, enabled)
+        })
+    }
+
+    /// Set the fixed value of an effect setting (by name; see `EffectKind::params`). Refused
+    /// while the setting is animated.
+    pub fn set_effect_value(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        effect: EffectId,
+        name: &str,
+        value: f64,
+    ) -> Result<()> {
+        self.edit_seq("Effect setting", seq, |s, _| {
+            ops::set_effect_value(s, clip, effect, name, value)
+        })
+    }
+
+    /// Put a keyframe on an effect setting at timeline time `time`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn key_effect(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        effect: EffectId,
+        name: &str,
+        time: Time,
+        value: f64,
+        interp: crate::animation::Interp,
+    ) -> Result<()> {
+        self.edit_seq("Effect keyframe", seq, |s, _| {
+            ops::key_effect(s, clip, effect, name, time, value, interp)
+        })
+    }
+
+    pub fn unkey_effect(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        effect: EffectId,
+        name: &str,
+        time: Time,
+    ) -> Result<()> {
+        self.edit_seq("Remove effect keyframe", seq, |s, _| {
+            ops::unkey_effect(s, clip, effect, name, time)
+        })
+    }
+
+    pub fn clear_effect_animation(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        effect: EffectId,
+        name: &str,
+    ) -> Result<()> {
+        self.edit_seq("Clear effect keyframes", seq, |s, _| {
+            ops::clear_effect_animation(s, clip, effect, name)
         })
     }
 

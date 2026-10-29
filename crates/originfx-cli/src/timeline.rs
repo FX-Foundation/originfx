@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use timeline_engine::media::probe_asset;
 use timeline_engine::{
-    Alignment, AssetId, ClipAudio, ClipId, Edge, Editor, Fade, FadeCurve, FrameRate, Gain, Interp,
-    LinkMode, MarkerColour, Pan, Param, PlaceMode, Project, Ripple, SequenceId, SequenceSettings,
-    Speed, SpeedMode, Target, Time, TrackKind, TrackUpdate, Transition, TransitionKind,
+    Alignment, AssetId, ClipAudio, ClipId, Edge, Editor, EffectId, EffectKind, Fade, FadeCurve,
+    FrameRate, Gain, Interp, LinkMode, MarkerColour, Pan, Param, PlaceMode, Project, Ripple,
+    SequenceId, SequenceSettings, Speed, SpeedMode, Target, Time, TrackKind, TrackUpdate,
+    Transition, TransitionKind,
 };
 
 use crate::CliResult;
@@ -193,6 +194,11 @@ enum Cmd {
     },
     /// Remove all keyframes of a value; its fixed value applies again.
     ClearKeys { target: String, param: String },
+    /// Picture effects on a clip: colour, blur, sharpen, vignette and more.
+    Effect {
+        #[command(subcommand)]
+        cmd: FxCmd,
+    },
     /// Add a marker.
     Marker {
         at: f64,
@@ -204,6 +210,75 @@ enum Cmd {
     Show,
     /// Check the project against every rule and list missing media.
     Check,
+}
+
+#[derive(Subcommand)]
+enum FxCmd {
+    /// List the effects and their settings.
+    Kinds,
+    /// Add an effect to a picture clip (at the end of its stack, or `--at` a position).
+    Add {
+        clip: String,
+        kind: String,
+        #[arg(long)]
+        at: Option<usize>,
+    },
+    /// Remove an effect from a clip.
+    Remove { clip: String, effect: String },
+    /// Move an effect to a position in the stack (0 is applied first).
+    Move {
+        clip: String,
+        effect: String,
+        to: usize,
+    },
+    /// Turn an effect on, or `--off`.
+    On {
+        clip: String,
+        effect: String,
+        #[arg(long)]
+        off: bool,
+    },
+    /// Set a setting to a fixed value, for example `effect set clip8 fx1 radius 3`.
+    Set {
+        clip: String,
+        effect: String,
+        name: String,
+        #[arg(allow_hyphen_values = true)]
+        value: f64,
+    },
+    /// Keyframe a setting at a time on the timeline (seconds).
+    Key {
+        clip: String,
+        effect: String,
+        name: String,
+        at: f64,
+        #[arg(allow_hyphen_values = true)]
+        value: f64,
+        /// hold, linear or smooth.
+        #[arg(long, default_value = "linear")]
+        interp: String,
+    },
+    /// Remove the keyframe of a setting at exactly this time.
+    Unkey {
+        clip: String,
+        effect: String,
+        name: String,
+        at: f64,
+    },
+    /// Remove all keyframes of a setting; its fixed value applies again.
+    ClearKeys {
+        clip: String,
+        effect: String,
+        name: String,
+    },
+}
+
+fn fx_id(text: &str) -> Result<EffectId, String> {
+    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+    digits
+        .parse()
+        .map(EffectId)
+        .map_err(|_| format!("'{text}' is not an effect id (like fx1)"))
 }
 
 fn id_number(text: &str) -> Result<u64, String> {
@@ -695,6 +770,116 @@ pub fn run(args: TimelineArgs) -> CliResult {
             save(&ed, &path, before)?;
             println!("cleared");
         }
+        Cmd::Effect { cmd } => match cmd {
+            FxCmd::Kinds => {
+                for k in EffectKind::ALL {
+                    let settings: Vec<String> = k
+                        .params()
+                        .iter()
+                        .map(|s| {
+                            format!(
+                                "{} ({} to {}, default {} {})",
+                                s.name, s.min, s.max, s.default, s.unit
+                            )
+                        })
+                        .collect();
+                    println!("{:<12} {}", k.name(), settings.join("; "));
+                }
+            }
+            other => {
+                let mut ed = load(&path)?;
+                let before = transitions(ed.project());
+                let seq = first_sequence(ed.project())?;
+                match other {
+                    FxCmd::Kinds => {}
+                    FxCmd::Add { clip, kind, at } => {
+                        let k = EffectKind::parse(&kind.to_ascii_lowercase()).ok_or_else(|| {
+                            format!("unknown effect '{kind}'; see `effect kinds`")
+                        })?;
+                        let id = ed.add_effect(seq, ClipId(id_number(&clip)?), k, at)?;
+                        println!("{id}");
+                    }
+                    FxCmd::Remove { clip, effect } => {
+                        ed.remove_effect(seq, ClipId(id_number(&clip)?), fx_id(&effect)?)?;
+                        println!("removed");
+                    }
+                    FxCmd::Move { clip, effect, to } => {
+                        ed.move_effect(seq, ClipId(id_number(&clip)?), fx_id(&effect)?, to)?;
+                        println!("moved");
+                    }
+                    FxCmd::On { clip, effect, off } => {
+                        ed.set_effect_enabled(
+                            seq,
+                            ClipId(id_number(&clip)?),
+                            fx_id(&effect)?,
+                            !off,
+                        )?;
+                        println!("{}", if off { "off" } else { "on" });
+                    }
+                    FxCmd::Set {
+                        clip,
+                        effect,
+                        name,
+                        value,
+                    } => {
+                        ed.set_effect_value(
+                            seq,
+                            ClipId(id_number(&clip)?),
+                            fx_id(&effect)?,
+                            &name,
+                            value,
+                        )?;
+                        println!("{name} {value}");
+                    }
+                    FxCmd::Key {
+                        clip,
+                        effect,
+                        name,
+                        at,
+                        value,
+                        interp,
+                    } => {
+                        let interp = Interp::parse(&interp)
+                            .ok_or("interp must be hold, linear or smooth")?;
+                        ed.key_effect(
+                            seq,
+                            ClipId(id_number(&clip)?),
+                            fx_id(&effect)?,
+                            &name,
+                            secs(at),
+                            value,
+                            interp,
+                        )?;
+                        println!("{name} {value} at {}", secs(at));
+                    }
+                    FxCmd::Unkey {
+                        clip,
+                        effect,
+                        name,
+                        at,
+                    } => {
+                        ed.unkey_effect(
+                            seq,
+                            ClipId(id_number(&clip)?),
+                            fx_id(&effect)?,
+                            &name,
+                            secs(at),
+                        )?;
+                        println!("removed");
+                    }
+                    FxCmd::ClearKeys { clip, effect, name } => {
+                        ed.clear_effect_animation(
+                            seq,
+                            ClipId(id_number(&clip)?),
+                            fx_id(&effect)?,
+                            &name,
+                        )?;
+                        println!("cleared");
+                    }
+                }
+                save(&ed, &path, before)?;
+            }
+        },
         Cmd::Show => {
             let p = Project::load(&path)?;
             println!("{}", p.name);
@@ -735,6 +920,14 @@ pub fn run(args: TimelineArgs) -> CliResult {
                         }
                         if c.reverse {
                             notes += " reversed";
+                        }
+                        for e in &c.effects {
+                            notes += &format!(
+                                " [{} {}{}]",
+                                e.id,
+                                e.kind,
+                                if e.enabled { "" } else { " off" }
+                            );
                         }
                         if let Some(t) = c.transition_in {
                             notes += &format!(

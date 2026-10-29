@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::animation::{Animation, Curve, Interp, Key, Param};
 use crate::audio::{Fade, FadeCurve, Gain, Pan};
+use crate::effects::{Effect, EffectId, EffectKind};
 use crate::error::{Error, Result};
 use crate::ids::*;
 use crate::model::*;
@@ -19,7 +20,7 @@ use crate::retime::{Alignment, Speed, Transition, TransitionKind};
 use crate::time::{FrameRate, Time};
 
 /// The file format version this build writes and reads.
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
@@ -89,6 +90,91 @@ struct ClipDto {
     /// Added in format version 4: keyframed values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     anim: Vec<CurveDto>,
+    /// Added in format version 5: the effect stack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    effects: Vec<EffectDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EffectDto {
+    id: u32,
+    kind: String,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    enabled: bool,
+    /// Every setting by name.
+    params: std::collections::BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    anim: Vec<CurveDto>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
+}
+
+fn effects_out(list: &[Effect]) -> Vec<EffectDto> {
+    list.iter()
+        .map(|e| {
+            let specs = e.kind.params();
+            EffectDto {
+                id: e.id.0,
+                kind: e.kind.name().to_string(),
+                enabled: e.enabled,
+                params: specs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| (s.name.to_string(), e.value(i)))
+                    .collect(),
+                anim: specs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| {
+                        e.curve(i).map(|c| CurveDto {
+                            param: s.name.to_string(),
+                            keys: keys_out(c),
+                        })
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+fn effects_in(list: Vec<EffectDto>) -> Result<Vec<Effect>> {
+    let mut out = Vec::new();
+    for d in list {
+        let kind = EffectKind::parse(&d.kind)
+            .ok_or_else(|| Error::File(format!("unknown effect {:?}", d.kind)))?;
+        let specs = kind.params();
+        let mut values = kind.defaults();
+        for (name, v) in &d.params {
+            let i = kind
+                .param_index(name)
+                .ok_or_else(|| Error::File(format!("{kind} has no setting {name:?}")))?;
+            values[i] = *v;
+        }
+        let mut curves = vec![None; specs.len()];
+        for c in d.anim {
+            let i = kind
+                .param_index(&c.param)
+                .ok_or_else(|| Error::File(format!("{kind} has no setting {:?}", c.param)))?;
+            if curves[i].is_some() {
+                return Err(Error::File(format!("{kind} {} is animated twice", c.param)));
+            }
+            curves[i] = Some(curve_in(c.keys, &c.param)?);
+        }
+        out.push(Effect::from_parts(
+            EffectId(d.id),
+            kind,
+            d.enabled,
+            values,
+            curves,
+        ));
+    }
+    Ok(out)
 }
 
 /// One animated value: its name and keys.
@@ -107,20 +193,38 @@ struct KeyDto {
     tangent: Option<f64>,
 }
 
+fn keys_out(c: &Curve) -> Vec<KeyDto> {
+    c.keys()
+        .iter()
+        .map(|k| KeyDto {
+            t: k.t,
+            v: k.value,
+            interp: k.interp.as_str().to_string(),
+            tangent: k.tangent,
+        })
+        .collect()
+}
+
+fn curve_in(keys: Vec<KeyDto>, what: &str) -> Result<Curve> {
+    let mut list = Vec::new();
+    for k in keys {
+        let interp = Interp::parse(&k.interp)
+            .ok_or_else(|| Error::File(format!("unknown interpolation {:?}", k.interp)))?;
+        list.push(Key {
+            t: k.t,
+            value: k.v,
+            interp,
+            tangent: k.tangent,
+        });
+    }
+    Curve::from_keys(list).map_err(|e| Error::File(format!("{what}: {e}")))
+}
+
 fn anim_out(a: &Animation) -> Vec<CurveDto> {
     a.iter()
         .map(|(p, c)| CurveDto {
             param: p.as_str().to_string(),
-            keys: c
-                .keys()
-                .iter()
-                .map(|k| KeyDto {
-                    t: k.t,
-                    v: k.value,
-                    interp: k.interp.as_str().to_string(),
-                    tangent: k.tangent,
-                })
-                .collect(),
+            keys: keys_out(c),
         })
         .collect()
 }
@@ -133,18 +237,7 @@ fn anim_in(list: Vec<CurveDto>) -> Result<Animation> {
         if a.is_animated(param) {
             return Err(Error::File(format!("{param} is animated twice")));
         }
-        let mut keys = Vec::new();
-        for k in c.keys {
-            let interp = Interp::parse(&k.interp)
-                .ok_or_else(|| Error::File(format!("unknown interpolation {:?}", k.interp)))?;
-            keys.push(Key {
-                t: k.t,
-                value: k.v,
-                interp,
-                tangent: k.tangent,
-            });
-        }
-        let curve = Curve::from_keys(keys).map_err(|e| Error::File(format!("{param}: {e}")))?;
+        let curve = curve_in(c.keys, param.as_str())?;
         a.set(param, curve);
     }
     Ok(a)
@@ -292,6 +385,7 @@ fn track_out(t: &Track) -> TrackDto {
                 fade_in: fade_out(c.fade_in),
                 fade_out: fade_out(c.fade_out),
                 anim: anim_out(&c.anim),
+                effects: effects_out(&c.effects),
             })
             .collect(),
     }
@@ -335,6 +429,7 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
             fade_in: fade_in_dto(c.fade_in)?,
             fade_out: fade_in_dto(c.fade_out)?,
             anim: anim_in(c.anim)?,
+            effects: effects_in(c.effects)?,
         };
         t.items.insert(clip.start, clip);
     }

@@ -12,6 +12,7 @@ use im::OrdMap;
 
 use crate::animation::{Animation, Interp, Param, Target};
 use crate::audio::{ClipAudio, Gain, Pan};
+use crate::effects::{Effect, EffectId, EffectKind, MAX_EFFECTS};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, SequenceId, TrackId};
 use crate::model::{Asset, Clip, Project, Sequence, Track, TrackKind, SOURCE_SLACK};
@@ -542,6 +543,7 @@ pub(crate) fn place_clip(
         fade_in: None,
         fade_out: None,
         anim: Animation::default(),
+        effects: Vec::new(),
     };
 
     match mode {
@@ -1533,4 +1535,186 @@ pub(crate) fn clear_animation(
     } else {
         Err(Error::NothingTo("clear: that value is not animated"))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Effects
+// ---------------------------------------------------------------------------
+
+/// A picture clip, unlocked, ready to have its effect stack changed.
+fn effect_clip(seq: &Sequence, id: ClipId) -> Result<(TrackId, Clip)> {
+    let (tid, c) = locate(seq, id)?;
+    if seq.track_position(tid).map(|(k, _)| k) != Some(TrackKind::Video) {
+        return Err(Error::NotPicture(id));
+    }
+    ensure_unlocked(seq, tid)?;
+    Ok((tid, c))
+}
+
+fn find_effect(c: &mut Clip, effect: EffectId) -> Result<&mut Effect> {
+    let clip = c.id;
+    c.effects
+        .iter_mut()
+        .find(|e| e.id == effect)
+        .ok_or(Error::NoSuchEffect { clip, effect })
+}
+
+fn setting_index(e: &Effect, name: &str) -> Result<usize> {
+    e.kind.param_index(name).ok_or_else(|| {
+        let names: Vec<&str> = e.kind.params().iter().map(|s| s.name).collect();
+        Error::BadEffect(format!(
+            "{} has no setting '{name}'; it has: {}",
+            e.kind,
+            names.join(", ")
+        ))
+    })
+}
+
+fn check_setting(e: &Effect, i: usize, value: f64) -> Result<()> {
+    let s = e.kind.params()[i];
+    if !value.is_finite() || value < s.min || value > s.max {
+        return Err(Error::BadEffect(format!(
+            "{} {} must be between {} and {} ({})",
+            e.kind, s.name, s.min, s.max, s.unit
+        )));
+    }
+    Ok(())
+}
+
+/// Add an effect to a picture clip, at `index` in the stack (the end if `None`). Returns its id.
+pub(crate) fn add_effect(
+    seq: &mut Sequence,
+    clip: ClipId,
+    kind: EffectKind,
+    index: Option<usize>,
+) -> Result<EffectId> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    if c.effects.len() >= MAX_EFFECTS {
+        return Err(Error::BadEffect(format!(
+            "a clip can have at most {MAX_EFFECTS} effects"
+        )));
+    }
+    let id = EffectId(c.effects.iter().map(|e| e.id.0).max().unwrap_or(0) + 1);
+    let at = index.unwrap_or(c.effects.len()).min(c.effects.len());
+    c.effects.insert(at, Effect::new(id, kind));
+    put(seq, tid, c)?;
+    Ok(id)
+}
+
+pub(crate) fn remove_effect(seq: &mut Sequence, clip: ClipId, effect: EffectId) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    find_effect(&mut c, effect)?;
+    c.effects.retain(|e| e.id != effect);
+    put(seq, tid, c)
+}
+
+/// Move an effect to position `to` in the stack (0 is applied first).
+pub(crate) fn move_effect(
+    seq: &mut Sequence,
+    clip: ClipId,
+    effect: EffectId,
+    to: usize,
+) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    find_effect(&mut c, effect)?;
+    let from = c.effects.iter().position(|e| e.id == effect).unwrap_or(0);
+    let e = c.effects.remove(from);
+    c.effects.insert(to.min(c.effects.len()), e);
+    put(seq, tid, c)
+}
+
+pub(crate) fn set_effect_enabled(
+    seq: &mut Sequence,
+    clip: ClipId,
+    effect: EffectId,
+    enabled: bool,
+) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    find_effect(&mut c, effect)?.enabled = enabled;
+    put(seq, tid, c)
+}
+
+/// Set the fixed value of a setting. Refused while the setting is animated.
+pub(crate) fn set_effect_value(
+    seq: &mut Sequence,
+    clip: ClipId,
+    effect: EffectId,
+    name: &str,
+    value: f64,
+) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    let e = find_effect(&mut c, effect)?;
+    let i = setting_index(e, name)?;
+    check_setting(e, i, value)?;
+    if e.is_animated(i) {
+        return Err(Error::Animated {
+            what: format!("{name} of {effect} on {clip}"),
+        });
+    }
+    e.values[i] = value;
+    put(seq, tid, c)
+}
+
+/// Put a key on a setting at timeline time `time`. A setting that was not animated starts from its
+/// fixed value at the start of the clip.
+pub(crate) fn key_effect(
+    seq: &mut Sequence,
+    clip: ClipId,
+    effect: EffectId,
+    name: &str,
+    time: Time,
+    value: f64,
+    interp: Interp,
+) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    if time < c.start || time > c.end() {
+        return Err(Error::NotInsideClip { clip, time });
+    }
+    let off = (time - c.start).ticks();
+    let e = find_effect(&mut c, effect)?;
+    let i = setting_index(e, name)?;
+    check_setting(e, i, value)?;
+    let mut curve = e.curves[i].clone().unwrap_or_default();
+    if curve.is_empty() && off > 0 {
+        curve.set(0, e.values[i], interp).map_err(bad_key)?;
+    }
+    curve.set(off, value, interp).map_err(bad_key)?;
+    e.curves[i] = Some(curve);
+    put(seq, tid, c)
+}
+
+/// Remove the key at exactly `time`; the last key ending the animation.
+pub(crate) fn unkey_effect(
+    seq: &mut Sequence,
+    clip: ClipId,
+    effect: EffectId,
+    name: &str,
+    time: Time,
+) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    let off = (time - c.start).ticks();
+    let e = find_effect(&mut c, effect)?;
+    let i = setting_index(e, name)?;
+    let mut curve = e.curves[i].clone().unwrap_or_default();
+    if !curve.remove(off) {
+        return Err(Error::NothingTo("remove: no keyframe at that time"));
+    }
+    e.curves[i] = if curve.is_empty() { None } else { Some(curve) };
+    put(seq, tid, c)
+}
+
+/// Stop animating a setting; its fixed value applies again.
+pub(crate) fn clear_effect_animation(
+    seq: &mut Sequence,
+    clip: ClipId,
+    effect: EffectId,
+    name: &str,
+) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    let e = find_effect(&mut c, effect)?;
+    let i = setting_index(e, name)?;
+    if e.curves[i].take().is_none() {
+        return Err(Error::NothingTo("clear: that setting is not animated"));
+    }
+    put(seq, tid, c)
 }

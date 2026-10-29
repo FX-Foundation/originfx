@@ -23,6 +23,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 originfx-audio-engine = { path = "../audio-engine" }
 originfx-keyframe-engine = { path = "../keyframe-engine" }
+originfx-effects-engine = { path = "../effects-engine" }
 originfx-media-engine = { path = "../media-engine", optional = true }
 
 [dev-dependencies]

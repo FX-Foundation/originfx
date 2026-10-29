@@ -49,6 +49,15 @@ pub enum Error {
     FadesTooLong { clip: ClipId },
     #[error("{what} is animated; clear its keyframes before setting a fixed value")]
     Animated { what: String },
+    #[error("{clip} has no effect {effect}")]
+    NoSuchEffect {
+        clip: ClipId,
+        effect: crate::effects::EffectId,
+    },
+    #[error("effect: {0}")]
+    BadEffect(String),
+    #[error("{0} is not a picture clip, so it has no effects")]
+    NotPicture(ClipId),
     #[error("keyframe: {0}")]
     BadKeyframe(String),
     #[error("{0} is still used by a clip")]

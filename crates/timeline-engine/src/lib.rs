@@ -48,6 +48,7 @@
 pub mod animation;
 pub mod audio;
 pub mod editor;
+pub mod effects;
 pub mod error;
 pub mod file;
 pub mod ids;
@@ -62,6 +63,7 @@ pub mod time;
 pub use animation::{Animation, Curve, Interp, Key, Param, Target};
 pub use audio::{ClipAudio, Fade, FadeCurve, Gain, Pan};
 pub use editor::Editor;
+pub use effects::{Effect, EffectId, EffectKind, ParamSpec, MAX_EFFECTS};
 pub use error::{Error, Result};
 pub use ids::*;
 pub use model::*;

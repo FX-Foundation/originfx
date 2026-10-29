@@ -118,7 +118,7 @@ impl<S: MediaSource> Renderer<S> {
         for layer in seq.video_layers_at(t) {
             match layer.transition {
                 None => {
-                    self.draw_clip(&mut canvas, (cw, ch), &layer.clip, layer.source_time)?;
+                    self.draw_clip(&mut canvas, (cw, ch), &layer.clip, layer.source_time, t)?;
                 }
                 Some(tr) => {
                     // Each side is drawn on its own transparent canvas, blended, and the result
@@ -127,7 +127,7 @@ impl<S: MediaSource> Renderer<S> {
                     for side in [&tr.outgoing, &tr.incoming] {
                         let mut buf = solid(cw, ch, [0, 0, 0, 0]);
                         if let Some(side) = side {
-                            self.draw_clip(&mut buf, (cw, ch), &side.clip, side.source_time)?;
+                            self.draw_clip(&mut buf, (cw, ch), &side.clip, side.source_time, t)?;
                         }
                         sides.push(buf);
                     }
@@ -144,8 +144,34 @@ impl<S: MediaSource> Renderer<S> {
         })
     }
 
-    /// Draw one clip's picture at `source_time` onto `canvas`, fitted to the frame.
+    /// Draw one clip's picture at `source_time` onto `canvas`, fitted to the frame, with the clip's
+    /// effects applied. `t` is the timeline time of the frame (effect settings can be animated).
+    ///
+    /// Effects see the clip on its own transparent canvas, so a blur or a vignette never mixes
+    /// with the layers underneath.
     fn draw_clip(
+        &mut self,
+        canvas: &mut [u8],
+        (cw, ch): (usize, usize),
+        clip: &Clip,
+        source_time: Time,
+        t: Time,
+    ) -> Result<()> {
+        let live = clip.live_effects_at(t);
+        if live.is_empty() {
+            return self.draw_clip_plain(canvas, (cw, ch), clip, source_time);
+        }
+        let mut own = solid(cw, ch, [0, 0, 0, 0]);
+        self.draw_clip_plain(&mut own, (cw, ch), clip, source_time)?;
+        for (kind, values) in live {
+            effects_engine::apply(kind, &values, &mut own, cw, ch);
+        }
+        blend_over(canvas, (cw, ch), &own, (cw, ch), (0, 0));
+        Ok(())
+    }
+
+    /// Draw one clip's picture, without effects.
+    fn draw_clip_plain(
         &mut self,
         canvas: &mut [u8],
         (cw, ch): (usize, usize),

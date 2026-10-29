@@ -1,0 +1,12 @@
+[package]
+name = "originfx-effects-engine"
+description = "OriginFX Effects Engine: picture effects: colour, blur, sharpen, vignette and more, on RGBA pixels"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "effects_engine"

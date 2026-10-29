@@ -28,7 +28,7 @@
 | Item | Engine |
 |---|---|
 | Animated position, scale, rotation and opacity | Compositing |
-| Animated effect settings | Effects |
+| Animated effect settings | Done: [Effects Engine](../effects-engine/README.md) |
 | Animated text and shape properties | Motion Graphics |
 | Curve editor, timeline lanes for keys | the interface, once it exists |
 | Keys on plug-in settings | Plugin |
