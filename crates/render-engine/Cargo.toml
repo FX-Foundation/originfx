@@ -1,0 +1,21 @@
+[package]
+name = "originfx-render-engine"
+description = "OriginFX Render Engine: turns a timeline into frames, sound and finished files"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "render_engine"
+
+[dependencies]
+originfx-timeline-engine = { path = "../timeline-engine" }
+originfx-media-engine = { path = "../media-engine" }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+originfx-timeline-engine = { path = "../timeline-engine", features = ["media"] }

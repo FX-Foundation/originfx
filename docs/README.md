@@ -32,4 +32,13 @@ Each engine has its own folder with the same set of pages.
 | [DECISIONS.md](timeline-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
 | [TRY_IT.md](timeline-engine/TRY_IT.md) | Checklist for trying it on your own machine |
 
+### Render Engine (done)
+
+| Document | What it is |
+|---|---|
+| [README.md](render-engine/README.md) | Full guide: compositing, sound, export, command line |
+| [ROADMAP.md](render-engine/ROADMAP.md) | What is next and what belongs to other engines |
+| [DECISIONS.md](render-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
+| [TRY_IT.md](render-engine/TRY_IT.md) | Checklist for trying it on your own machine |
+
 The other engines get their own folders as they are built.

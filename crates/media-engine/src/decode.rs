@@ -1008,7 +1008,9 @@ impl AudioDecoder {
                     }
                     self.skip_before = None;
                     if buf.pts_secs < t {
-                        let skip = ((t - buf.pts_secs) * f64::from(buf.sample_rate)) as usize
+                        // Round, don't truncate: 17.9999999 samples means 18.
+                        let skip = ((t - buf.pts_secs) * f64::from(buf.sample_rate)).round()
+                            as usize
                             * usize::from(buf.channels);
                         let skip = skip.min(buf.samples.len());
                         return Ok(Some(AudioBuffer {

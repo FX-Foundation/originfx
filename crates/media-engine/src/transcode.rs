@@ -253,11 +253,74 @@ pub fn export_with_progress(
     settings: &ExportSettings,
     on_progress: impl FnMut(&Progress) -> bool,
 ) -> Result<ExportReport> {
-    crate::init();
-    let (input, output) = (input.as_ref(), output.as_ref());
+    let input = input.as_ref();
     if !input.exists() {
         return Err(Error::NotFound(input.to_path_buf()));
     }
+    export_inner(input, output.as_ref(), settings, None, None, on_progress)
+}
+
+/// Export from the read end of a [`WorkingPipe`](crate::working::WorkingPipe), as the frames are
+/// being written. `total_secs` is the length the caller knows the stream will have, so progress
+/// can be reported as a fraction. Trimming (`start_secs`, `end_secs`) is not available on a
+/// stream, and GPU encoding that fails part-way is an error rather than a restart, since a stream
+/// can only be read once.
+#[cfg(unix)]
+pub fn export_pipe_with_progress(
+    pipe: crate::working::WorkingPipe,
+    output: impl AsRef<Path>,
+    settings: &ExportSettings,
+    total_secs: Option<f64>,
+    on_progress: impl FnMut(&Progress) -> bool,
+) -> Result<ExportReport> {
+    if settings.start_secs.is_some() || settings.end_secs.is_some() {
+        return Err(Error::InvalidArgument(
+            "a stream cannot be trimmed; choose the range when producing it".into(),
+        ));
+    }
+    let url = pipe.url().to_string();
+    // A pipe does not reliably tell the exporter its frame rate, so say it here.
+    let mut settings = settings.clone();
+    if settings.fps.is_none() {
+        settings.fps = Some(f64::from(pipe.fps.0) / f64::from(pipe.fps.1));
+    }
+    let settings = &settings;
+    let mut keep = StreamGuard(Some(pipe));
+    export_inner(
+        Path::new(&url),
+        output.as_ref(),
+        settings,
+        Some(total_secs),
+        Some(&mut keep),
+        on_progress,
+    )
+}
+
+/// Holds the pipe's read end open until the export has opened its own descriptor on it.
+#[cfg(unix)]
+struct StreamGuard(Option<crate::working::WorkingPipe>);
+#[cfg(not(unix))]
+struct StreamGuard;
+
+impl StreamGuard {
+    fn release(&mut self) {
+        #[cfg(unix)]
+        {
+            self.0 = None;
+        }
+    }
+}
+
+fn export_inner(
+    input: &Path,
+    output: &Path,
+    settings: &ExportSettings,
+    // `Some(total)` marks a stream whose length is given by the caller.
+    stream_total: Option<Option<f64>>,
+    mut stream_guard: Option<&mut StreamGuard>,
+    on_progress: impl FnMut(&Progress) -> bool,
+) -> Result<ExportReport> {
+    crate::init();
     settings.preset.check_available()?;
 
     let mut on_progress = on_progress;
@@ -271,26 +334,88 @@ pub fn export_with_progress(
             (_, Err(reason)) => Err(reason),
         }
     };
-    let result = match gpu {
-        Ok(None) => run_export(input, output, settings, None, &mut on_progress),
-        Err(reason) => {
-            run_export(input, output, settings, None, &mut on_progress).map(|r| ExportReport {
+    let result = if stream_total.is_some() {
+        // A stream can be read only once, so there is no second attempt in software.
+        match gpu {
+            Ok(name) => run_export(
+                input,
+                output,
+                settings,
+                name,
+                stream_total,
+                &mut stream_guard,
+                &mut on_progress,
+            ),
+            Err(reason) => run_export(
+                input,
+                output,
+                settings,
+                None,
+                stream_total,
+                &mut stream_guard,
+                &mut on_progress,
+            )
+            .map(|r| ExportReport {
                 hw_fallback_reason: Some(reason),
                 ..r
-            })
+            }),
         }
-        Ok(Some(name)) => match run_export(input, output, settings, Some(name), &mut on_progress) {
-            Err(e) if settings.hw_encode == HwPolicy::Auto && !matches!(e, Error::Cancelled) => {
-                // Anything going wrong with NVENC is retried in software from the
-                // start; a problem that is not the GPU's fails again there.
-                let _ = std::fs::remove_file(output);
-                run_export(input, output, settings, None, &mut on_progress).map(|r| ExportReport {
-                    hw_fallback_reason: Some(format!("{name} failed: {e}")),
-                    ..r
-                })
-            }
-            other => other,
-        },
+    } else {
+        match gpu {
+            Ok(None) => run_export(
+                input,
+                output,
+                settings,
+                None,
+                stream_total,
+                &mut stream_guard,
+                &mut on_progress,
+            ),
+            Err(reason) => run_export(
+                input,
+                output,
+                settings,
+                None,
+                stream_total,
+                &mut stream_guard,
+                &mut on_progress,
+            )
+            .map(|r| ExportReport {
+                hw_fallback_reason: Some(reason),
+                ..r
+            }),
+            Ok(Some(name)) => match run_export(
+                input,
+                output,
+                settings,
+                Some(name),
+                stream_total,
+                &mut stream_guard,
+                &mut on_progress,
+            ) {
+                Err(e)
+                    if settings.hw_encode == HwPolicy::Auto && !matches!(e, Error::Cancelled) =>
+                {
+                    // Anything going wrong with NVENC is retried in software from the
+                    // start; a problem that is not the GPU's fails again there.
+                    let _ = std::fs::remove_file(output);
+                    run_export(
+                        input,
+                        output,
+                        settings,
+                        None,
+                        stream_total,
+                        &mut stream_guard,
+                        &mut on_progress,
+                    )
+                    .map(|r| ExportReport {
+                        hw_fallback_reason: Some(format!("{name} failed: {e}")),
+                        ..r
+                    })
+                }
+                other => other,
+            },
+        }
     };
     if result.is_err() {
         let _ = std::fs::remove_file(output);
@@ -591,7 +716,7 @@ fn video_options(settings: &ExportSettings, encoder: &str) -> Vec<(&'static str,
 /// `Context::new()` allocates without a codec, which skips the codec's default
 /// settings; libx264 then rejects the context with "broken ffmpeg default
 /// settings detected". Allocating with the codec applies those defaults.
-fn new_encoder_context(codec: &ffmpeg::Codec) -> Result<codec::context::Context> {
+pub(crate) fn new_encoder_context(codec: &ffmpeg::Codec) -> Result<codec::context::Context> {
     // SAFETY: `avcodec_alloc_context3` returns a freshly allocated context or
     // null. We check for null, and `wrap(.., None)` makes the wrapper own it,
     // so it is freed exactly once when dropped.
@@ -606,7 +731,7 @@ fn new_encoder_context(codec: &ffmpeg::Codec) -> Result<codec::context::Context>
     }
 }
 
-fn dictionary(pairs: &[(&str, String)]) -> Dictionary<'static> {
+pub(crate) fn dictionary(pairs: &[(&str, String)]) -> Dictionary<'static> {
     let mut d = Dictionary::new();
     for (k, v) in pairs {
         d.set(k, v);
@@ -1408,12 +1533,17 @@ fn run_export(
     output: &Path,
     settings: &ExportSettings,
     gpu_encoder: Option<&'static str>,
+    stream_total: Option<Option<f64>>,
+    stream_guard: &mut Option<&mut StreamGuard>,
     mut on_progress: impl FnMut(&Progress) -> bool,
 ) -> Result<ExportReport> {
     let started = Instant::now();
     let preset = settings.preset;
     let trim = settings.trim_range()?;
     let mut ictx = format::input(&input)?;
+    if let Some(g) = stream_guard.as_deref_mut() {
+        g.release();
+    }
 
     let pick = |ictx: &format::context::Input,
                 wanted: Option<usize>,
@@ -1459,9 +1589,12 @@ fn run_export(
         0.0
     };
 
-    let total_secs = {
-        let d = ictx.duration();
-        (d > 0).then(|| d as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
+    let total_secs = match stream_total {
+        Some(known) => known,
+        None => {
+            let d = ictx.duration();
+            (d > 0).then(|| d as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
+        }
     };
     let (trim_start, trim_end) = trim.unwrap_or((0.0, None));
     let total_secs = total_secs.map(|t| (trim_end.unwrap_or(t).min(t) - trim_start).max(0.0));

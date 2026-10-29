@@ -240,6 +240,11 @@ impl ExportPreset {
         self.video().is_some()
     }
 
+    /// True for presets that carry sound (all but the silent GIF).
+    pub fn has_audio(self) -> bool {
+        self.audio().is_some()
+    }
+
     /// True for presets that produce no video at all.
     pub fn audio_only(self) -> bool {
         self.video().is_none()
