@@ -6,7 +6,7 @@ The ten engines are built one at a time, in this order. Each engine lives in its
 | # | Engine | Status | Docs |
 |---|--------|--------|------|
 | 1 | Media | **Done and tested** | [docs/media-engine](media-engine/README.md) |
-| 2 | Timeline | Planned | n/a |
+| 2 | Timeline | **Done and tested** | [docs/timeline-engine](timeline-engine/README.md) |
 | 3 | Render | Planned | n/a |
 | 4 | Video Editing | Planned | n/a |
 | 5 | Audio | Planned | n/a |

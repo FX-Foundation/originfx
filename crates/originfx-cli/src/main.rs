@@ -2,6 +2,7 @@
 //! `originfx`: command line front-end for the OriginFX engines.
 
 mod png;
+mod timeline;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Build and edit a timeline project file (the Timeline Engine).
+    Timeline(timeline::TimelineArgs),
     /// Show what is inside a media file.
     Probe {
         file: PathBuf,
@@ -197,6 +200,9 @@ type CliResult = Result<(), Box<dyn std::error::Error>>;
 
 fn run(cmd: Command) -> CliResult {
     match cmd {
+        Command::Timeline(args) => {
+            timeline::run(args)?;
+        }
         Command::Probe { file, json } => {
             let info = probe(&file)?;
             if json {

@@ -46,7 +46,7 @@ OriginFX is built as ten engines, one at a time, in this order. Each has its own
 | # | Engine | Status | Docs |
 |---|--------|--------|------|
 | 1 | Media | **Done and tested** | [Guide](docs/media-engine/README.md) |
-| 2 | Timeline | Planned | n/a |
+| 2 | Timeline | **Done and tested** | [Guide](docs/timeline-engine/README.md) |
 | 3 | Render | Planned | n/a |
 | 4 | Video Editing | Planned | n/a |
 | 5 | Audio | Planned | n/a |
