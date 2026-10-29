@@ -527,6 +527,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "originfx-media-engine",
+ "originfx-render-engine",
  "originfx-timeline-engine",
 ]
 
@@ -537,6 +538,17 @@ dependencies = [
  "ffmpeg-next",
  "ffmpeg-sys-next",
  "lru",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "originfx-render-engine"
+version = "0.1.0"
+dependencies = [
+ "originfx-media-engine",
+ "originfx-timeline-engine",
+ "tempfile",
  "thiserror",
 ]
 

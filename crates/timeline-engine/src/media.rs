@@ -56,7 +56,12 @@ pub fn asset_from_info(info: &media::MediaInfo) -> NewAsset {
 }
 
 /// Probe a file and describe it as an asset.
+///
+/// The stored path is absolute, so the project still finds the file when it is opened from
+/// another folder.
 pub fn probe_asset(path: impl AsRef<Path>) -> Result<NewAsset> {
-    let info = media::probe(path).map_err(|e| Error::Media(e.to_string()))?;
+    let path = path.as_ref();
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let info = media::probe(&absolute).map_err(|e| Error::Media(e.to_string()))?;
     Ok(asset_from_info(&info))
 }

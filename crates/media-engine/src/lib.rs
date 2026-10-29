@@ -63,6 +63,7 @@ pub mod proxy;
 pub mod subtitle;
 pub mod transcode;
 pub mod types;
+pub mod working;
 
 pub use cache::{CacheStats, FrameCache, FrameReader};
 pub use colour::ColourInfo;
@@ -74,8 +75,13 @@ pub use preset::{ExportPreset, Quality};
 pub use probe::probe;
 pub use proxy::{ProxyManager, ProxySettings};
 pub use subtitle::read_subtitles;
+#[cfg(unix)]
+pub use transcode::export_pipe_with_progress;
 pub use transcode::{export, export_with_progress, ExportReport, ExportSettings, Progress};
 pub use types::*;
+#[cfg(unix)]
+pub use working::WorkingPipe;
+pub use working::{WorkingAudio, WorkingFileWriter, WorkingSpec};
 
 use std::sync::Once;
 

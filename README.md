@@ -31,13 +31,17 @@ This is not a side project. This is a movement.
 
 ## Current Status
 
-> OriginFX is in early development. The first engine is done; the rest are being designed.
+> OriginFX is in early development. The first three engines are done; the rest are being designed.
 
 **The Media Engine is built and tested.** It is a Rust library plus a small `originfx`
 command-line tool that opens any video, reports what is inside it, jumps to any frame
 exactly, caches frames, writes 19 export formats, makes proxies, carries subtitles and
 chapters, and can use the GPU (NVIDIA CUDA and NVENC, VA-API) when asked. Software output
 is the default and GPU use is always opt-in.
+
+**The Timeline Engine and the Render Engine are built and tested too.** You can build a
+project from the command line (`originfx timeline`), edit it with undo and redo, and render it
+to any of the 19 formats with `originfx render`, or save one picture with `originfx render-frame`.
 
 ### Engines
 
@@ -47,7 +51,7 @@ OriginFX is built as ten engines, one at a time, in this order. Each has its own
 |---|--------|--------|------|
 | 1 | Media | **Done and tested** | [Guide](docs/media-engine/README.md) |
 | 2 | Timeline | **Done and tested** | [Guide](docs/timeline-engine/README.md) |
-| 3 | Render | Planned | n/a |
+| 3 | Render | **Done and tested** | [Guide](docs/render-engine/README.md) |
 | 4 | Video Editing | Planned | n/a |
 | 5 | Audio | Planned | n/a |
 | 6 | Keyframe | Planned | n/a |
