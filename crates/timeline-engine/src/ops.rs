@@ -337,9 +337,36 @@ impl Project {
                 duration: new.duration,
                 video: new.video,
                 audio: new.audio,
+                generator: None,
             },
         );
         id
+    }
+
+    pub(crate) fn add_generated(
+        &mut self,
+        name: String,
+        g: crate::graphics::Generator,
+    ) -> Result<AssetId> {
+        crate::graphics::validate(&g)?;
+        let id = AssetId(self.next_id);
+        self.next_id += 1;
+        self.assets.insert(id, crate::graphics::asset(id, name, g));
+        Ok(id)
+    }
+
+    pub(crate) fn set_generated(
+        &mut self,
+        id: AssetId,
+        g: crate::graphics::Generator,
+    ) -> Result<()> {
+        crate::graphics::validate(&g)?;
+        let asset = self.assets.get_mut(&id).ok_or(Error::NoSuchAsset(id))?;
+        if asset.generator.is_none() {
+            return Err(Error::NotGenerated(id));
+        }
+        asset.generator = Some(g);
+        Ok(())
     }
 
     pub(crate) fn remove_asset(&mut self, id: AssetId) -> Result<()> {
@@ -359,6 +386,9 @@ impl Project {
 
     pub(crate) fn relink_asset(&mut self, id: AssetId, path: std::path::PathBuf) -> Result<()> {
         let asset = self.assets.get_mut(&id).ok_or(Error::NoSuchAsset(id))?;
+        if asset.generator.is_some() {
+            return Err(Error::Generated(id));
+        }
         asset.path = path;
         Ok(())
     }

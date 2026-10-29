@@ -86,4 +86,13 @@ Each engine has its own folder with the same set of pages.
 | [DECISIONS.md](compositing-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
 | [TRY_IT.md](compositing-engine/TRY_IT.md) | Checklist for trying it on your own machine |
 
+### Motion Graphics Engine (done)
+
+| Document | What it is |
+|---|---|
+| [README.md](motion-graphics-engine/README.md) | Full guide: shapes, gradients, text and fonts, command line |
+| [ROADMAP.md](motion-graphics-engine/ROADMAP.md) | What is next and what belongs to other engines |
+| [DECISIONS.md](motion-graphics-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
+| [TRY_IT.md](motion-graphics-engine/TRY_IT.md) | Checklist for trying it on your own machine |
+
 The other engines get their own folders as they are built.

@@ -25,6 +25,7 @@ originfx-audio-engine = { path = "../audio-engine" }
 originfx-keyframe-engine = { path = "../keyframe-engine" }
 originfx-effects-engine = { path = "../effects-engine" }
 originfx-compositing-engine = { path = "../compositing-engine" }
+originfx-motion-graphics-engine = { path = "../motion-graphics-engine", features = ["serde"] }
 originfx-media-engine = { path = "../media-engine", optional = true }
 
 [dev-dependencies]

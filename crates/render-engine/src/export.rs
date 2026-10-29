@@ -109,7 +109,7 @@ pub fn export_sequence(
         let s = project.sequence(seq).ok_or(Error::NoSuchSequence(seq))?;
         for (_, clip) in s.clips() {
             if let Some(a) = project.asset(clip.asset) {
-                if !a.path.exists() {
+                if a.generator.is_none() && !a.path.exists() {
                     return Err(Error::MissingMedia {
                         asset: a.id,
                         name: a.name.clone(),

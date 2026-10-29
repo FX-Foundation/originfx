@@ -13,7 +13,7 @@ The ten engines are built one at a time, in this order. Each engine lives in its
 | 6 | Keyframe | **Done and tested** | [docs/keyframe-engine](keyframe-engine/README.md) |
 | 7 | Effects | **Done and tested** | [docs/effects-engine](effects-engine/README.md) |
 | 8 | Compositing | **Done and tested** | [docs/compositing-engine](compositing-engine/README.md) |
-| 9 | Motion Graphics | Planned | n/a |
+| 9 | Motion Graphics | **Done and tested** | [docs/motion-graphics-engine](motion-graphics-engine/README.md) |
 | 10 | Plugin | Planned | n/a |
 
 A Resource Governor, which keeps the engines within the machine's memory and CPU/GPU budget, sits alongside them. It is also planned.

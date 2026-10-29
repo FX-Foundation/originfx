@@ -133,7 +133,7 @@ impl Project {
     pub fn missing_assets(&self) -> Vec<AssetId> {
         self.assets()
             .values()
-            .filter(|a| !a.path.exists())
+            .filter(|a| a.generator.is_none() && !a.path.exists())
             .map(|a| a.id)
             .collect()
     }

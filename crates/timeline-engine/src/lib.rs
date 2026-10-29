@@ -52,6 +52,7 @@ pub mod editor;
 pub mod effects;
 pub mod error;
 pub mod file;
+pub mod graphics;
 pub mod ids;
 #[cfg(feature = "media")]
 pub mod media;
@@ -67,6 +68,8 @@ pub use compositing::{Affine, BlendMode, Look, Mask, MaskShape, MaskSpec, Transf
 pub use editor::Editor;
 pub use effects::{Effect, EffectId, EffectKind, ParamSpec, MAX_EFFECTS};
 pub use error::{Error, Result};
+pub use graphics::validate as validate_graphic;
+pub use graphics::{Align, Colour, Fill, Generator, Shadow, Shape, ShapeKind, Stroke, Text};
 pub use ids::*;
 pub use model::*;
 pub use ops::{ClipSpec, Edge, LinkMode, PlaceMode, Placed, Ripple, TrackUpdate};

@@ -208,6 +208,26 @@ impl Editor {
         self.apply("Import media", None, |p| Ok(p.add_asset(new)))
     }
 
+    /// Add a drawn graphic (a colour, gradient, shape or text) to the project's media. Place it
+    /// like any other picture; it has no length of its own, so it can be held for any time.
+    pub fn add_generated(
+        &mut self,
+        name: impl Into<String>,
+        generator: crate::graphics::Generator,
+    ) -> Result<AssetId> {
+        let name = name.into();
+        self.apply("Add graphic", None, |p| p.add_generated(name, generator))
+    }
+
+    /// Change a drawn graphic. Every clip that uses it changes.
+    pub fn set_generated(
+        &mut self,
+        id: AssetId,
+        generator: crate::graphics::Generator,
+    ) -> Result<()> {
+        self.apply("Edit graphic", None, |p| p.set_generated(id, generator))
+    }
+
     /// Remove a media file that no clip uses.
     pub fn remove_asset(&mut self, id: AssetId) -> Result<()> {
         self.apply("Remove media", None, |p| p.remove_asset(id))

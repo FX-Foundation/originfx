@@ -25,6 +25,6 @@
 
 | Item | Engine |
 |---|---|
-| Text, shapes and animated graphics as layers | Motion Graphics |
+| Text, shapes and animated graphics as layers | Done in the [Motion Graphics Engine](../motion-graphics-engine/README.md) |
 | Blend modes or masks from plug-ins | Plugin |
 | Transform handles, mask drawing, keyframe lanes | the interface, once it exists |

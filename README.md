@@ -39,7 +39,7 @@ exactly, caches frames, writes 19 export formats, makes proxies, carries subtitl
 chapters, and can use the GPU (NVIDIA CUDA and NVENC, VA-API) when asked. Software output
 is the default and GPU use is always opt-in.
 
-**The Timeline, Render, Video Editing, Audio, Keyframe, Effects and Compositing engines are built and tested too.** You can build a
+**The Timeline, Render, Video Editing, Audio, Keyframe, Effects, Compositing and Motion Graphics engines are built and tested too.** You can build a
 project from the command line (`originfx timeline`), edit it with undo and redo, and render it
 to any of the 19 formats with `originfx render`, or save one picture with `originfx render-frame`.
 Clips can be sped up, slowed down and reversed, and joined with dissolves, dips, wipes and pushes.
@@ -47,6 +47,7 @@ Sound has gain, pan, fades, track and master levels and a loudness meter (`origi
 Values can change over time with keyframes: volume and pan automation and speed ramps (`originfx timeline key`).
 Picture clips take a stack of effects: colour, blur, sharpen, vignette and more (`originfx timeline effect`).
 Layers have opacity, blend modes, position, scale, rotation, crop and masks, all animatable (`originfx timeline look|blend|mask`).
+Graphics are drawn rather than filmed: solid colours, gradients, shapes and text (`originfx timeline graphic`).
 
 ### Engines
 
@@ -62,7 +63,7 @@ OriginFX is built as ten engines, one at a time, in this order. Each has its own
 | 6 | Keyframe | **Done and tested** | [Guide](docs/keyframe-engine/README.md) |
 | 7 | Effects | **Done and tested** | [Guide](docs/effects-engine/README.md) |
 | 8 | Compositing | **Done and tested** | [Guide](docs/compositing-engine/README.md) |
-| 9 | Motion Graphics | Planned | n/a |
+| 9 | Motion Graphics | **Done and tested** | [Guide](docs/motion-graphics-engine/README.md) |
 | 10 | Plugin | Planned | n/a |
 
 The full roadmap is in [docs/ROADMAP.md](docs/ROADMAP.md).

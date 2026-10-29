@@ -29,6 +29,6 @@
 |---|---|
 | Animated position, scale, rotation and opacity | Done in the [Compositing Engine](../compositing-engine/README.md) |
 | Animated effect settings | Done: [Effects Engine](../effects-engine/README.md) |
-| Animated text and shape properties | Motion Graphics |
+| Animated text and shape properties | Motion Graphics (position, scale, rotation, opacity work today; the roadmap lists the rest) |
 | Curve editor, timeline lanes for keys | the interface, once it exists |
 | Keys on plug-in settings | Plugin |

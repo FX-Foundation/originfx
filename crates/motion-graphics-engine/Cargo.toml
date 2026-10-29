@@ -1,0 +1,20 @@
+[package]
+name = "originfx-motion-graphics-engine"
+description = "OriginFX Motion Graphics Engine: solid colours, gradients, shapes and text drawn as RGBA layers"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "motion_graphics_engine"
+
+[features]
+# Saving generators in project files.
+serde = ["dep:serde"]
+
+[dependencies]
+fontdue = "0.9"
+serde = { version = "1", features = ["derive"], optional = true }

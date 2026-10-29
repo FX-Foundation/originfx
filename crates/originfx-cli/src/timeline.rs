@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use timeline_engine::media::probe_asset;
 use timeline_engine::{
-    Alignment, AssetId, ClipAudio, ClipId, Edge, Editor, EffectId, EffectKind, Fade, FadeCurve,
-    FrameRate, Gain, Interp, LinkMode, MarkerColour, Pan, Param, PlaceMode, Project, Ripple,
-    SequenceId, SequenceSettings, Speed, SpeedMode, Target, Time, TrackKind, TrackUpdate,
-    Transition, TransitionKind,
+    Align, Alignment, AssetId, ClipAudio, ClipId, Colour, Edge, Editor, EffectId, EffectKind, Fade,
+    FadeCurve, Fill, FrameRate, Gain, Generator, Interp, LinkMode, MarkerColour, Pan, Param,
+    PlaceMode, Project, Ripple, SequenceId, SequenceSettings, Shadow, Shape, ShapeKind, Speed,
+    SpeedMode, Stroke, Target, Text, Time, TrackKind, TrackUpdate, Transition, TransitionKind,
 };
 
 use crate::CliResult;
@@ -40,6 +40,12 @@ enum Cmd {
         /// Use drop-frame timecode (29.97 and 59.94 only).
         #[arg(long)]
         drop_frame: bool,
+        /// How many picture tracks the sequence starts with.
+        #[arg(long, default_value_t = 2)]
+        video_tracks: u32,
+        /// How many sound tracks the sequence starts with.
+        #[arg(long, default_value_t = 2)]
+        audio_tracks: u32,
     },
     /// Add a media file to the project and print its id.
     Import { file: PathBuf },
@@ -202,6 +208,7 @@ enum Cmd {
         /// opacity, x, y, scale-x, scale-y, rotation, crop-left/right/top/bottom,
         /// mask-x, mask-y, mask-width, mask-height, mask-feather.
         param: String,
+        #[arg(allow_hyphen_values = true)]
         value: String,
     },
     /// Choose how a picture clip's colour combines with the layers beneath, or `list`.
@@ -212,6 +219,12 @@ enum Cmd {
         shape: String,
         #[arg(long)]
         invert: bool,
+    },
+    /// Drawn graphics: solid colours, gradients, shapes and text. They are media like a file is:
+    /// add one, then place it with `add` (give a `--length`).
+    Graphic {
+        #[command(subcommand)]
+        cmd: GfxCmd,
     },
     /// Picture effects on a clip: colour, blur, sharpen, vignette and more.
     Effect {
@@ -229,6 +242,240 @@ enum Cmd {
     Show,
     /// Check the project against every rule and list missing media.
     Check,
+}
+
+#[derive(Subcommand)]
+enum GfxCmd {
+    /// Add a graphic to the project's media; prints its asset id.
+    Add {
+        name: String,
+        #[command(subcommand)]
+        kind: GfxKind,
+    },
+    /// Replace what a graphic looks like (every clip using it changes).
+    Set {
+        asset: String,
+        #[command(subcommand)]
+        kind: GfxKind,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum GfxKind {
+    /// The whole frame in one colour.
+    Solid { colour: String },
+    /// The whole frame, blending from one colour to another.
+    Gradient {
+        from: String,
+        to: String,
+        /// 0 runs left to right, 90 top to bottom.
+        #[arg(long, default_value_t = 90.0, allow_hyphen_values = true)]
+        angle: f64,
+    },
+    /// A shape in the middle of the frame: rect, ellipse, polygon or star. Move, size and turn it
+    /// with `look` on the clip.
+    Shape {
+        shape: String,
+        /// Percent of the frame width.
+        #[arg(long, default_value_t = 30.0)]
+        width: f64,
+        /// Percent of the frame height.
+        #[arg(long, default_value_t = 30.0)]
+        height: f64,
+        #[arg(long, default_value = "white")]
+        fill: String,
+        /// A second colour makes the fill a gradient from `--fill` to this.
+        #[arg(long)]
+        fill_to: Option<String>,
+        #[arg(long, default_value_t = 90.0, allow_hyphen_values = true)]
+        angle: f64,
+        /// Outline colour.
+        #[arg(long)]
+        stroke: Option<String>,
+        /// Outline width, percent of the frame height.
+        #[arg(long, default_value_t = 1.0)]
+        stroke_width: f64,
+        /// Rect only: corner rounding, percent of the shorter side (100 is a pill).
+        #[arg(long, default_value_t = 0.0)]
+        corner: f64,
+        /// Polygon sides or star points.
+        #[arg(long, default_value_t = 5)]
+        sides: u32,
+        /// Star only: inner radius, percent of the outer.
+        #[arg(long, default_value_t = 40.0)]
+        inner: f64,
+    },
+    /// Text in the middle of the frame; `\n` or a real newline starts a new line.
+    Text {
+        text: String,
+        /// A font file (.ttf or .otf). Without one the first usual system font is used.
+        #[arg(long)]
+        font: Option<String>,
+        /// Percent of the frame height.
+        #[arg(long, default_value_t = 10.0)]
+        size: f64,
+        #[arg(long, default_value = "white")]
+        colour: String,
+        /// left, centre or right (for the lines against each other).
+        #[arg(long, default_value = "centre")]
+        align: String,
+        /// Extra space between lines, percent of the size.
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+        line_gap: f64,
+        /// Extra space between letters, percent of the size.
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+        tracking: f64,
+        /// Outline colour.
+        #[arg(long)]
+        outline: Option<String>,
+        /// Outline width, percent of the frame height.
+        #[arg(long, default_value_t = 0.5)]
+        outline_width: f64,
+        /// Drop shadow colour.
+        #[arg(long)]
+        shadow: Option<String>,
+        /// Shadow offset right and down, percent of the frame height.
+        #[arg(long, default_value_t = 0.5, allow_hyphen_values = true)]
+        shadow_x: f64,
+        #[arg(long, default_value_t = 0.5, allow_hyphen_values = true)]
+        shadow_y: f64,
+    },
+}
+
+fn colour(text: &str) -> Result<Colour, String> {
+    Colour::parse(text).ok_or_else(|| {
+        format!("'{text}' is not a colour; use #rrggbb, #rrggbbaa or a name like red")
+    })
+}
+
+fn generator(kind: GfxKind) -> Result<Generator, String> {
+    Ok(match kind {
+        GfxKind::Solid { colour: c } => Generator::Fill(Fill::Solid(colour(&c)?)),
+        GfxKind::Gradient { from, to, angle } => Generator::Fill(Fill::Linear {
+            from: colour(&from)?,
+            to: colour(&to)?,
+            angle_deg: angle,
+        }),
+        GfxKind::Shape {
+            shape,
+            width,
+            height,
+            fill,
+            fill_to,
+            angle,
+            stroke,
+            stroke_width,
+            corner,
+            sides,
+            inner,
+        } => {
+            let kind = match shape.to_ascii_lowercase().as_str() {
+                "rect" | "rectangle" | "box" => ShapeKind::Rect { corner_pct: corner },
+                "ellipse" | "circle" | "oval" => ShapeKind::Ellipse,
+                "polygon" => ShapeKind::Polygon { sides },
+                "star" => ShapeKind::Star {
+                    points: sides,
+                    inner_pct: inner,
+                },
+                other => {
+                    return Err(format!(
+                        "unknown shape '{other}'; use rect, ellipse, polygon or star"
+                    ))
+                }
+            };
+            let from = colour(&fill)?;
+            let fill = match fill_to {
+                Some(to) => Fill::Linear {
+                    from,
+                    to: colour(&to)?,
+                    angle_deg: angle,
+                },
+                None => Fill::Solid(from),
+            };
+            Generator::Shape(Shape {
+                kind,
+                width_pct: width,
+                height_pct: height,
+                fill,
+                stroke: stroke
+                    .map(|c| {
+                        Ok::<_, String>(Stroke {
+                            colour: colour(&c)?,
+                            width_pct: stroke_width,
+                        })
+                    })
+                    .transpose()?,
+            })
+        }
+        GfxKind::Text {
+            text,
+            font,
+            size,
+            colour: c,
+            align,
+            line_gap,
+            tracking,
+            outline,
+            outline_width,
+            shadow,
+            shadow_x,
+            shadow_y,
+        } => Generator::Text(Text {
+            text: text.replace("\\n", "\n"),
+            font,
+            size_pct: size,
+            colour: colour(&c)?,
+            align: Align::parse(&align.to_ascii_lowercase())
+                .ok_or("align must be left, centre or right")?,
+            line_gap_pct: line_gap,
+            tracking_pct: tracking,
+            outline: outline
+                .map(|c| {
+                    Ok::<_, String>(Stroke {
+                        colour: colour(&c)?,
+                        width_pct: outline_width,
+                    })
+                })
+                .transpose()?,
+            shadow: shadow
+                .map(|c| {
+                    Ok::<_, String>(Shadow {
+                        colour: colour(&c)?,
+                        dx_pct: shadow_x,
+                        dy_pct: shadow_y,
+                    })
+                })
+                .transpose()?,
+        }),
+    })
+}
+
+fn describe(g: &Generator) -> String {
+    match g {
+        Generator::Fill(Fill::Solid(c)) => format!("solid {}", c.hex()),
+        Generator::Fill(Fill::Linear { from, to, .. }) => {
+            format!("gradient {} to {}", from.hex(), to.hex())
+        }
+        Generator::Shape(s) => format!(
+            "{} {}x{}%",
+            match s.kind {
+                ShapeKind::Rect { .. } => "rect",
+                ShapeKind::Ellipse => "ellipse",
+                ShapeKind::Polygon { .. } => "polygon",
+                ShapeKind::Star { .. } => "star",
+            },
+            s.width_pct,
+            s.height_pct
+        ),
+        Generator::Text(t) => {
+            let flat = t.text.replace('\n', " / ");
+            let short: String = flat.chars().take(30).collect();
+            format!(
+                "text \"{short}{}\"",
+                if flat.chars().count() > 30 { "..." } else { "" }
+            )
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -426,6 +673,8 @@ pub fn run(args: TimelineArgs) -> CliResult {
             fps,
             size,
             drop_frame,
+            video_tracks,
+            audio_tracks,
         } => {
             if path.exists() {
                 return Err(format!("{} already exists", path.display()).into());
@@ -442,6 +691,8 @@ pub fn run(args: TimelineArgs) -> CliResult {
                 width: w,
                 height: h,
                 drop_frame: drop_frame && rate.supports_drop_frame(),
+                video_tracks: video_tracks as _,
+                audio_tracks: audio_tracks as _,
                 ..Default::default()
             })?;
             ed.project().save(&path)?;
@@ -849,6 +1100,23 @@ pub fn run(args: TimelineArgs) -> CliResult {
             }
             save(&ed, &path, before)?;
         }
+        Cmd::Graphic { cmd } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            match cmd {
+                GfxCmd::Add { name, kind } => {
+                    let id = ed.add_generated(name, generator(kind)?)?;
+                    save(&ed, &path, before)?;
+                    println!("{id}");
+                }
+                GfxCmd::Set { asset, kind } => {
+                    let id = AssetId(id_number(&asset)?);
+                    ed.set_generated(id, generator(kind)?)?;
+                    save(&ed, &path, before)?;
+                    println!("updated {id}");
+                }
+            }
+        }
         Cmd::Effect { cmd } => match cmd {
             FxCmd::Kinds => {
                 for k in EffectKind::ALL {
@@ -963,7 +1231,11 @@ pub fn run(args: TimelineArgs) -> CliResult {
             let p = Project::load(&path)?;
             println!("{}", p.name);
             for a in p.assets().values() {
-                let len = a.duration.map_or("still".to_string(), |d| d.to_string());
+                let len = match (&a.generator, a.duration) {
+                    (Some(g), _) => format!("graphic: {}", describe(g)),
+                    (None, Some(d)) => d.to_string(),
+                    (None, None) => "still".to_string(),
+                };
                 println!("  {} {} ({len})", a.id, a.name);
             }
             for s in p.sequences().values() {

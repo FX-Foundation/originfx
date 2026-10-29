@@ -33,5 +33,5 @@
 |---|---|
 | Animated effect parameters | Keyframe (volume and pan are done) |
 | Effects as plug-ins (VST/CLAP hosting, custom DSP) | Plugin |
-| Sound for generated graphics and titles | Motion Graphics |
+| Sound for generated graphics and titles | Motion Graphics (graphics are done; they are silent) |
 | Playing sound live, with sync to picture | the player, once it exists |
