@@ -113,7 +113,7 @@ targets: -23 LUFS (EBU broadcast), -16 LUFS (podcasts and most streaming), -14 L
 
 ## Project files
 
-Format version 3. Versions 1 and 2 load unchanged (every level at 0 dB, centre, no fades). Out-of-range gains or pans,
+Format version 3 (now 4, which adds [keyframes](../keyframe-engine/README.md)). Versions 1 and 2 load unchanged (every level at 0 dB, centre, no fades). Out-of-range gains or pans,
 or unknown fade curves, are refused with a clear error on load.
 
 ## How it is tested

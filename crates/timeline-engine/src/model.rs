@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use im::{OrdMap, Vector};
 
+use crate::animation::{Animation, Param};
 use crate::audio::{Fade, Gain, Pan};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
@@ -126,6 +127,9 @@ pub struct Clip {
     pub pan: Pan,
     pub fade_in: Option<Fade>,
     pub fade_out: Option<Fade>,
+    /// Keyframed values, with times measured from the start of the clip. An animated value
+    /// replaces its fixed field (`speed`, `gain`, `pan`).
+    pub anim: Animation,
 }
 
 /// Media is allowed to overshoot its length by this much (a few ticks), so that rounding in
@@ -148,7 +152,46 @@ impl Clip {
 
     /// How much of the asset the clip shows: its length scaled by its speed.
     pub fn source_len(&self) -> Time {
-        self.speed.media_len(self.duration)
+        self.media_len(self.duration)
+    }
+
+    /// How much media plays in the first `off` of the clip: `off` scaled by the speed, or, for
+    /// a clip with a speed ramp, the exact area under the speed curve. Outside the clip the
+    /// first and last speeds simply carry on.
+    pub fn media_len(&self, off: Time) -> Time {
+        match self.anim.get(Param::Speed) {
+            None => self.speed.media_len(off),
+            Some(curve) => Time::from_ticks(curve.integral(off.ticks()).round() as i64),
+        }
+    }
+
+    /// True if the clip has a speed ramp.
+    pub fn is_ramped(&self) -> bool {
+        self.anim.is_animated(Param::Speed)
+    }
+
+    /// The speed (1 is normal) at timeline time `t`.
+    pub fn speed_at(&self, t: Time) -> f64 {
+        self.anim
+            .get(Param::Speed)
+            .and_then(|c| c.eval((t - self.start).ticks()))
+            .unwrap_or_else(|| self.speed.as_f64())
+    }
+
+    /// The gain in decibels at timeline time `t`.
+    pub fn gain_db_at(&self, t: Time) -> f64 {
+        self.anim
+            .get(Param::Gain)
+            .and_then(|c| c.eval((t - self.start).ticks()))
+            .unwrap_or_else(|| f64::from(self.gain.db()))
+    }
+
+    /// The pan in percent at timeline time `t`.
+    pub fn pan_at(&self, t: Time) -> f64 {
+        self.anim
+            .get(Param::Pan)
+            .and_then(|c| c.eval((t - self.start).ticks()))
+            .unwrap_or_else(|| f64::from(self.pan.percent()))
     }
 
     /// The span of the asset the clip shows.
@@ -165,9 +208,9 @@ impl Clip {
     pub fn source_time_at(&self, t: Time) -> Time {
         let off = t - self.start;
         if self.reverse {
-            self.source_in + self.source_len() - self.speed.media_len(off)
+            self.source_in + self.source_len() - self.media_len(off)
         } else {
-            self.source_in + self.speed.media_len(off)
+            self.source_in + self.media_len(off)
         }
     }
 
@@ -197,10 +240,13 @@ impl Clip {
         c.start = start;
         c.duration = end - start;
         c.source_in = if self.reverse {
-            self.source_in + self.source_len() - self.speed.media_len(end - self.start)
+            self.source_in + self.source_len() - self.media_len(end - self.start)
         } else {
-            self.source_in + self.speed.media_len(start - self.start)
+            self.source_in + self.media_len(start - self.start)
         };
+        c.anim = self
+            .anim
+            .slice((start - self.start).ticks(), (end - self.start).ticks());
         c
     }
 
@@ -229,6 +275,8 @@ pub struct Track {
     /// Audio tracks: level change and pan applied to the sum of the track's clips.
     pub gain: Gain,
     pub pan: Pan,
+    /// Audio tracks: keyframed gain and pan, with times measured from the start of the sequence.
+    pub anim: Animation,
     pub(crate) items: OrdMap<Time, Clip>,
 }
 
@@ -243,8 +291,25 @@ impl Track {
             solo: false,
             gain: Gain::UNITY,
             pan: Pan::CENTRE,
+            anim: Animation::default(),
             items: OrdMap::new(),
         }
+    }
+
+    /// The track's gain in decibels at sequence time `t`.
+    pub fn gain_db_at(&self, t: Time) -> f64 {
+        self.anim
+            .get(Param::Gain)
+            .and_then(|c| c.eval(t.ticks()))
+            .unwrap_or_else(|| f64::from(self.gain.db()))
+    }
+
+    /// The track's pan in percent at sequence time `t`.
+    pub fn pan_at(&self, t: Time) -> f64 {
+        self.anim
+            .get(Param::Pan)
+            .and_then(|c| c.eval(t.ticks()))
+            .unwrap_or_else(|| f64::from(self.pan.percent()))
     }
 
     /// The clips in time order.
@@ -436,6 +501,8 @@ pub struct Sequence {
     pub timecode_start: Time,
     /// Level change applied to the whole mix, after every track.
     pub master_gain: Gain,
+    /// Keyframed master gain, with times measured from the start of the sequence.
+    pub master_anim: Animation,
     pub(crate) video: Vector<Track>,
     pub(crate) audio: Vector<Track>,
     pub(crate) markers: Vector<Marker>,
@@ -453,10 +520,19 @@ impl Sequence {
             drop_frame: settings.drop_frame,
             timecode_start: settings.timecode_start,
             master_gain: Gain::UNITY,
+            master_anim: Animation::default(),
             video: Vector::new(),
             audio: Vector::new(),
             markers: Vector::new(),
         }
+    }
+
+    /// The master gain in decibels at sequence time `t`.
+    pub fn master_gain_db_at(&self, t: Time) -> f64 {
+        self.master_anim
+            .get(Param::Gain)
+            .and_then(|c| c.eval(t.ticks()))
+            .unwrap_or_else(|| f64::from(self.master_gain.db()))
     }
 
     /// The video tracks, bottom first (V1 is index 0 and is drawn underneath the rest).
@@ -684,6 +760,13 @@ impl Sequence {
                 if !track_ids.insert(track.id) {
                     return bad(format!("{} appears twice", track.id));
                 }
+                let allowed: &[Param] = match kind {
+                    TrackKind::Video => &[],
+                    TrackKind::Audio => &[Param::Gain, Param::Pan],
+                };
+                if let Some(p) = track.anim.problem(allowed, None) {
+                    return bad(format!("{}: {p}", track.id));
+                }
                 let mut previous: Option<&Clip> = None;
                 for (key, clip) in track.items.iter() {
                     if *key != clip.start {
@@ -732,6 +815,13 @@ impl Sequence {
                     {
                         return bad(format!("{} has fades longer than the clip", clip.id));
                     }
+                    let allowed: &[Param] = match kind {
+                        TrackKind::Video => &[Param::Speed],
+                        TrackKind::Audio => &Param::ALL,
+                    };
+                    if let Some(p) = clip.anim.problem(allowed, Some(clip.duration.ticks())) {
+                        return bad(format!("{}: {p}", clip.id));
+                    }
                     if kind == TrackKind::Video
                         && (!clip.gain.is_unity()
                             || !clip.pan.is_centre()
@@ -751,6 +841,9 @@ impl Sequence {
                     previous = Some(clip);
                 }
             }
+        }
+        if let Some(p) = self.master_anim.problem(&[Param::Gain], None) {
+            return bad(format!("master: {p}"));
         }
         let mut marker_ids = HashSet::new();
         for m in &self.markers {

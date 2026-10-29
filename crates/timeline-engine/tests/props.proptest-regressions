@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ac2dc2b9ec7e56d4eb082da646c9ffd8776b7d6335c6239bc4b2f89f2e49fe6a # shrinks to ops = [Place { track: 0, start: 26, dur: 51, insert: false, pair: false }, Key { pick: 0, param: 2, offset: 51, value: 2079, interp: 1 }, Split { pick: 0, at: 75 }]

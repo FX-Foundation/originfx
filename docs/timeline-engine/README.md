@@ -77,7 +77,7 @@ hold one while you keep editing.
 ## Project files
 
 `Project::save` / `load` write plain, human-readable JSON (`"format": "originfx-project"`,
-`"version": 3`; versions 1 and 2 files still load). Saving goes through a temporary file and a rename, so a crash cannot leave half a
+`"version": 4`; versions 1 to 3 files still load). Saving goes through a temporary file and a rename, so a crash cannot leave half a
 project. Loading runs the full rule check, so a damaged or hand-edited file is refused with a clear
 error. A file from a newer version is refused with `UnsupportedVersion` instead of being guessed at.
 

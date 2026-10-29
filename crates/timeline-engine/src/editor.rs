@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 
+use crate::animation::{Interp, Param, Target};
 use crate::audio::{ClipAudio, Gain};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
@@ -541,8 +542,62 @@ impl Editor {
     /// Change the level of the whole mix of a sequence.
     pub fn set_master_gain(&mut self, seq: SequenceId, gain: Gain) -> Result<()> {
         self.edit_seq("Master level", seq, |s, _| {
+            if s.master_anim.is_animated(Param::Gain) {
+                return Err(Error::Animated {
+                    what: "the master gain".into(),
+                });
+            }
             s.master_gain = gain;
             Ok(())
+        })
+    }
+
+    // ----- keyframes -------------------------------------------------------------
+
+    /// Put a keyframe on a clip, an audio track or the master at timeline time `time`, replacing
+    /// any key already there. `value` is in the parameter's unit (dB, percent, speed ratio).
+    /// A parameter that was not animated starts from its fixed value, which stays in force until
+    /// the new key. Speed keys (speed ramps) follow links so picture and sound stay in step.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_keyframe(
+        &mut self,
+        seq: SequenceId,
+        target: Target,
+        param: Param,
+        time: Time,
+        value: f64,
+        interp: Interp,
+        links: LinkMode,
+    ) -> Result<()> {
+        self.edit_seq("Keyframe", seq, |s, _| {
+            ops::set_keyframe(s, target, param, time, value, interp, links)
+        })
+    }
+
+    /// Remove the keyframe at exactly `time`.
+    pub fn remove_keyframe(
+        &mut self,
+        seq: SequenceId,
+        target: Target,
+        param: Param,
+        time: Time,
+        links: LinkMode,
+    ) -> Result<()> {
+        self.edit_seq("Remove keyframe", seq, |s, _| {
+            ops::remove_keyframe(s, target, param, time, links)
+        })
+    }
+
+    /// Stop animating a value; its fixed value applies again.
+    pub fn clear_animation(
+        &mut self,
+        seq: SequenceId,
+        target: Target,
+        param: Param,
+        links: LinkMode,
+    ) -> Result<()> {
+        self.edit_seq("Clear keyframes", seq, |s, _| {
+            ops::clear_animation(s, target, param, links)
         })
     }
 

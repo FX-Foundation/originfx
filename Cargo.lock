@@ -537,6 +537,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "originfx-keyframe-engine"
+version = "0.1.0"
+
+[[package]]
 name = "originfx-media-engine"
 version = "0.1.0"
 dependencies = [
@@ -564,6 +568,7 @@ version = "0.1.0"
 dependencies = [
  "im",
  "originfx-audio-engine",
+ "originfx-keyframe-engine",
  "originfx-media-engine",
  "proptest",
  "serde",

@@ -10,6 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use im::OrdMap;
 
+use crate::animation::{Animation, Interp, Param, Target};
 use crate::audio::{ClipAudio, Gain, Pan};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, SequenceId, TrackId};
@@ -435,6 +436,16 @@ pub(crate) fn update_track(seq: &mut Sequence, id: TrackId, update: TrackUpdate)
         if track.kind != TrackKind::Audio {
             return Err(Error::Invalid(format!("{id} is not an audio track")));
         }
+        if update.gain.is_some() && track.anim.is_animated(Param::Gain) {
+            return Err(Error::Animated {
+                what: format!("the gain of {id}"),
+            });
+        }
+        if update.pan.is_some() && track.anim.is_animated(Param::Pan) {
+            return Err(Error::Animated {
+                what: format!("the pan of {id}"),
+            });
+        }
         if let Some(v) = update.gain {
             track.gain = v;
         }
@@ -530,6 +541,7 @@ pub(crate) fn place_clip(
         pan: Pan::CENTRE,
         fade_in: None,
         fade_out: None,
+        anim: Animation::default(),
     };
 
     match mode {
@@ -1139,6 +1151,11 @@ pub(crate) fn set_speed(
     for id in &group {
         let (track, old) = locate(seq, *id)?;
         ensure_unlocked(seq, track)?;
+        if old.is_ramped() {
+            return Err(Error::Animated {
+                what: format!("the speed of {id}"),
+            });
+        }
         if old.speed == speed {
             continue;
         }
@@ -1273,6 +1290,16 @@ pub(crate) fn set_clip_audio(
         }
         ensure_unlocked(seq, tid)?;
         any = true;
+        if change.gain.is_some() && c.anim.is_animated(Param::Gain) {
+            return Err(Error::Animated {
+                what: format!("the gain of {id}"),
+            });
+        }
+        if change.pan.is_some() && c.anim.is_animated(Param::Pan) {
+            return Err(Error::Animated {
+                what: format!("the pan of {id}"),
+            });
+        }
         if let Some(g) = change.gain {
             c.gain = g;
         }
@@ -1296,5 +1323,214 @@ pub(crate) fn set_clip_audio(
         Ok(())
     } else {
         Err(Error::NothingTo("change: no audio clip given"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keyframes
+// ---------------------------------------------------------------------------
+
+fn bad_key(msg: impl std::fmt::Display) -> Error {
+    Error::BadKeyframe(msg.to_string())
+}
+
+/// Put a key in `anim`. A parameter that was not animated yet starts from `fixed` (its fixed
+/// value) at time zero, so the value stays as it was until the new key takes over.
+fn key_into(
+    anim: &mut Animation,
+    param: Param,
+    off: i64,
+    value: f64,
+    interp: Interp,
+    fixed: f64,
+) -> Result<()> {
+    if !param.contains(value) {
+        let (lo, hi) = param.range();
+        return Err(bad_key(format!(
+            "{param} must be between {lo} and {hi}{}",
+            param.unit()
+        )));
+    }
+    let mut curve = anim.get(param).cloned().unwrap_or_default();
+    if curve.is_empty() && off > 0 {
+        curve.set(0, fixed, interp).map_err(bad_key)?;
+    }
+    curve.set(off, value, interp).map_err(bad_key)?;
+    anim.set(param, curve);
+    Ok(())
+}
+
+/// What a keyframe edit needs to know about where its target lives.
+enum Place {
+    Clip(Vec<ClipId>),
+    Track(TrackId),
+    Master,
+}
+
+fn place_of(seq: &Sequence, target: Target, param: Param, links: LinkMode) -> Result<Place> {
+    match target {
+        Target::Clip(id) => {
+            // A speed ramp has to stay in step between a picture and its linked sound.
+            let ids = if param == Param::Speed {
+                expand(seq, &[id], links)?
+            } else {
+                vec![id]
+            };
+            Ok(Place::Clip(ids))
+        }
+        Target::Track(id) => {
+            let track = seq.track(id).ok_or(Error::NoSuchTrack(id))?;
+            if track.kind != TrackKind::Audio || param == Param::Speed {
+                return Err(bad_key(format!(
+                    "{id}: only audio tracks have animated gain and pan"
+                )));
+            }
+            Ok(Place::Track(id))
+        }
+        Target::Master => {
+            if param != Param::Gain {
+                return Err(bad_key("the master only has gain"));
+            }
+            Ok(Place::Master)
+        }
+    }
+}
+
+/// Check that a clip can take this parameter.
+fn clip_can(seq: &Sequence, tid: TrackId, id: ClipId, param: Param) -> Result<()> {
+    let is_audio = seq.track_position(tid).map(|(k, _)| k) == Some(TrackKind::Audio);
+    if param != Param::Speed && !is_audio {
+        return Err(Error::NotAudio(id));
+    }
+    Ok(())
+}
+
+/// Set a keyframe at timeline time `time`, replacing any key already there.
+pub(crate) fn set_keyframe(
+    seq: &mut Sequence,
+    target: Target,
+    param: Param,
+    time: Time,
+    value: f64,
+    interp: Interp,
+    links: LinkMode,
+) -> Result<()> {
+    match place_of(seq, target, param, links)? {
+        Place::Clip(ids) => {
+            for id in ids {
+                let (tid, mut c) = locate(seq, id)?;
+                clip_can(seq, tid, id, param)?;
+                ensure_unlocked(seq, tid)?;
+                if time < c.start || time > c.end() {
+                    return Err(Error::NotInsideClip { clip: id, time });
+                }
+                let fixed = match param {
+                    Param::Gain => f64::from(c.gain.db()),
+                    Param::Pan => f64::from(c.pan.percent()),
+                    Param::Speed => c.speed.as_f64(),
+                };
+                key_into(
+                    &mut c.anim,
+                    param,
+                    (time - c.start).ticks(),
+                    value,
+                    interp,
+                    fixed,
+                )?;
+                put(seq, tid, c)?;
+            }
+        }
+        Place::Track(id) => {
+            if time < Time::ZERO {
+                return Err(Error::BeforeStart(time));
+            }
+            let track = seq.track_mut(id)?;
+            let fixed = match param {
+                Param::Gain => f64::from(track.gain.db()),
+                _ => f64::from(track.pan.percent()),
+            };
+            key_into(&mut track.anim, param, time.ticks(), value, interp, fixed)?;
+        }
+        Place::Master => {
+            if time < Time::ZERO {
+                return Err(Error::BeforeStart(time));
+            }
+            let fixed = f64::from(seq.master_gain.db());
+            key_into(
+                &mut seq.master_anim,
+                param,
+                time.ticks(),
+                value,
+                interp,
+                fixed,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove the keyframe at exactly `time`. When it was the last one the parameter stops being
+/// animated and goes back to its fixed value.
+pub(crate) fn remove_keyframe(
+    seq: &mut Sequence,
+    target: Target,
+    param: Param,
+    time: Time,
+    links: LinkMode,
+) -> Result<()> {
+    let drop_key = |anim: &mut Animation, off: i64| -> bool {
+        let Some(mut curve) = anim.get(param).cloned() else {
+            return false;
+        };
+        let found = curve.remove(off);
+        anim.set(param, curve);
+        found
+    };
+    let mut found = false;
+    match place_of(seq, target, param, links)? {
+        Place::Clip(ids) => {
+            for id in ids {
+                let (tid, mut c) = locate(seq, id)?;
+                ensure_unlocked(seq, tid)?;
+                found |= drop_key(&mut c.anim, (time - c.start).ticks());
+                put(seq, tid, c)?;
+            }
+        }
+        Place::Track(id) => {
+            found = drop_key(&mut seq.track_mut(id)?.anim, time.ticks());
+        }
+        Place::Master => found = drop_key(&mut seq.master_anim, time.ticks()),
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(Error::NothingTo("remove: no keyframe at that time"))
+    }
+}
+
+/// Stop animating a parameter: its curve is thrown away and the fixed value applies again.
+pub(crate) fn clear_animation(
+    seq: &mut Sequence,
+    target: Target,
+    param: Param,
+    links: LinkMode,
+) -> Result<()> {
+    let mut found = false;
+    match place_of(seq, target, param, links)? {
+        Place::Clip(ids) => {
+            for id in ids {
+                let (tid, mut c) = locate(seq, id)?;
+                ensure_unlocked(seq, tid)?;
+                found |= c.anim.remove(param);
+                put(seq, tid, c)?;
+            }
+        }
+        Place::Track(id) => found = seq.track_mut(id)?.anim.remove(param),
+        Place::Master => found = seq.master_anim.remove(param),
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(Error::NothingTo("clear: that value is not animated"))
     }
 }

@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use media_engine::{AudioBuffer, VideoFrame};
 use timeline_engine::{
-    Asset, AssetId, Clip, Project, Sequence, SequenceId, Time, TimeRange, MAX_TRANSITION_SECS,
+    Asset, AssetId, Clip, Param, Project, Sequence, SequenceId, Time, TimeRange,
+    MAX_TRANSITION_SECS,
 };
 
 use crate::composite::{blend_over, placement, solid, Fit};
@@ -326,18 +327,72 @@ impl<S: MediaSource> Renderer<S> {
                         pair[1] *= g;
                     }
                 }
-                audio_engine::gain::apply_gain_pan(&mut part, clip.gain.linear(), clip.pan.value());
+                if clip.anim.is_animated(Param::Gain) || clip.anim.is_animated(Param::Pan) {
+                    audio_engine::gain::apply_gain_pan_with(&mut part, |j| {
+                        let t = Time::from_samples(from + j as i64, rate);
+                        (
+                            if clip.anim.is_animated(Param::Gain) {
+                                audio_engine::db_to_gain(clip.gain_db_at(t) as f32)
+                            } else {
+                                clip.gain.linear()
+                            },
+                            if clip.anim.is_animated(Param::Pan) {
+                                (clip.pan_at(t) / 100.0) as f32
+                            } else {
+                                clip.pan.value()
+                            },
+                        )
+                    });
+                } else {
+                    audio_engine::gain::apply_gain_pan(
+                        &mut part,
+                        clip.gain.linear(),
+                        clip.pan.value(),
+                    );
+                }
                 let at = ((from - first) * 2) as usize;
                 for (m, s) in bus[at..at + part.len()].iter_mut().zip(&part) {
                     *m += *s;
                 }
             }
-            audio_engine::gain::apply_gain_pan(&mut bus, track.gain.linear(), track.pan.value());
+            if track.anim.is_empty() {
+                audio_engine::gain::apply_gain_pan(
+                    &mut bus,
+                    track.gain.linear(),
+                    track.pan.value(),
+                );
+            } else {
+                audio_engine::gain::apply_gain_pan_with(&mut bus, |j| {
+                    let t = Time::from_samples(first + j as i64, rate);
+                    (
+                        if track.anim.is_animated(Param::Gain) {
+                            audio_engine::db_to_gain(track.gain_db_at(t) as f32)
+                        } else {
+                            track.gain.linear()
+                        },
+                        if track.anim.is_animated(Param::Pan) {
+                            (track.pan_at(t) / 100.0) as f32
+                        } else {
+                            track.pan.value()
+                        },
+                    )
+                });
+            }
             for (m, s) in mix.iter_mut().zip(&bus) {
                 *m += *s;
             }
         }
-        audio_engine::gain::apply_gain_pan(&mut mix, seq.master_gain.linear(), 0.0);
+        if seq.master_anim.is_animated(Param::Gain) {
+            audio_engine::gain::apply_gain_pan_with(&mut mix, |j| {
+                let t = Time::from_samples(first + j as i64, rate);
+                (
+                    audio_engine::db_to_gain(seq.master_gain_db_at(t) as f32),
+                    0.0,
+                )
+            });
+        } else {
+            audio_engine::gain::apply_gain_pan(&mut mix, seq.master_gain.linear(), 0.0);
+        }
         audio_engine::apply_limiter(&mut mix, self.settings.limiter);
         Ok(mix)
     }
@@ -356,15 +411,28 @@ impl<S: MediaSource> Renderer<S> {
     ) -> Result<Vec<f32>> {
         let count = (to - from) as usize;
         let sr = f64::from(rate);
-        if clip.speed.is_normal() && !clip.reverse {
+        if clip.speed.is_normal() && !clip.reverse && !clip.is_ramped() {
             let secs = clip.source_in.as_secs_f64() + (from - cs) as f64 / sr;
             return self.source.audio(asset, clip.stream, secs, count, rate);
         }
         // Where each output sample reads from, in media samples (fractional).
         let speed = clip.speed.as_f64();
         let origin = clip.source_in.as_secs_f64() * sr;
+        let ramp_origin = clip.source_in.as_secs_f64();
+        let ramp_len = clip.source_len().as_secs_f64();
         let position = |k: i64| -> f64 {
-            if clip.reverse {
+            if clip.is_ramped() {
+                // A speed ramp: how much media has played is the area under the speed curve.
+                if clip.reverse {
+                    let played = clip
+                        .media_len(Time::from_samples(k + 1, rate))
+                        .as_secs_f64();
+                    (ramp_origin + ramp_len - played) * sr
+                } else {
+                    let played = clip.media_len(Time::from_samples(k, rate)).as_secs_f64();
+                    (ramp_origin + played) * sr
+                }
+            } else if clip.reverse {
                 origin + (n - 1 - k) as f64 * speed
             } else {
                 origin + k as f64 * speed

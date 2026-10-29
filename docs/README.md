@@ -59,4 +59,13 @@ Each engine has its own folder with the same set of pages.
 | [DECISIONS.md](audio-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
 | [TRY_IT.md](audio-engine/TRY_IT.md) | Checklist for trying it on your own machine |
 
+### Keyframe Engine (done)
+
+| Document | What it is |
+|---|---|
+| [README.md](keyframe-engine/README.md) | Full guide: curves, volume and pan automation, speed ramps, command line |
+| [ROADMAP.md](keyframe-engine/ROADMAP.md) | What is next and what belongs to other engines |
+| [DECISIONS.md](keyframe-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
+| [TRY_IT.md](keyframe-engine/TRY_IT.md) | Checklist for trying it on your own machine |
+
 The other engines get their own folders as they are built.

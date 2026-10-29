@@ -14,7 +14,7 @@
 
 | Item | Belongs to |
 |---|---|
-| Keyframes (volume, position, opacity over time) | Keyframe |
+| Keyframes for position and opacity over time | Compositing (volume, pan and speed keyframes are done: [Keyframe Engine](../keyframe-engine/README.md)) |
 | Effects and colour on clips | Effects |
 | Opacity, blend modes, transforms | Compositing |
 | Nested sequences (a sequence used as a clip) | Next step for this engine once Render exists |

@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use timeline_engine::media::probe_asset;
 use timeline_engine::{
-    Alignment, AssetId, ClipAudio, ClipId, Edge, Editor, Fade, FadeCurve, FrameRate, Gain,
-    LinkMode, MarkerColour, Pan, PlaceMode, Project, Ripple, SequenceId, SequenceSettings, Speed,
-    SpeedMode, Time, TrackKind, TrackUpdate, Transition, TransitionKind,
+    Alignment, AssetId, ClipAudio, ClipId, Edge, Editor, Fade, FadeCurve, FrameRate, Gain, Interp,
+    LinkMode, MarkerColour, Pan, Param, PlaceMode, Project, Ripple, SequenceId, SequenceSettings,
+    Speed, SpeedMode, Target, Time, TrackKind, TrackUpdate, Transition, TransitionKind,
 };
 
 use crate::CliResult;
@@ -171,6 +171,28 @@ enum Cmd {
         #[arg(long, allow_hyphen_values = true, conflicts_with = "db")]
         normalize: Option<f64>,
     },
+    /// Put a keyframe on a value that changes over time: gain (dB), pan (%) or speed (a ratio).
+    /// The target is a clip (`clip7`), an audio track (`a1`) or `master`. `at` is in seconds on
+    /// the timeline. A speed key on a clip makes a speed ramp.
+    Key {
+        target: String,
+        /// gain, pan or speed.
+        param: String,
+        at: f64,
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+        /// hold, linear or smooth: how to travel from this key to the next.
+        #[arg(long, default_value = "linear")]
+        interp: String,
+    },
+    /// Remove the keyframe at a time (it must be exactly where the key is).
+    Unkey {
+        target: String,
+        param: String,
+        at: f64,
+    },
+    /// Remove all keyframes of a value; its fixed value applies again.
+    ClearKeys { target: String, param: String },
     /// Add a marker.
     Marker {
         at: f64,
@@ -202,6 +224,41 @@ fn parse_gain(text: &str) -> Result<Gain, String> {
         .ok()
         .and_then(Gain::from_db)
         .ok_or_else(|| format!("'{text}' is not a level in decibels (at most +24)"))
+}
+
+/// What a keyframe command points at: `clip7`, `a1` (an audio track) or `master`.
+fn parse_target(p: &Project, seq: SequenceId, text: &str) -> Result<Target, String> {
+    let t = text.trim().to_ascii_lowercase();
+    if t == "master" {
+        return Ok(Target::Master);
+    }
+    if let Some(n) = t.strip_prefix('a').and_then(|n| n.parse::<usize>().ok()) {
+        return track_id(p, seq, TrackKind::Audio, n).map(Target::Track);
+    }
+    if t.starts_with('v') && t[1..].parse::<usize>().is_ok() {
+        return Err("picture tracks have no animated values; target a clip instead".into());
+    }
+    Ok(Target::Clip(ClipId(id_number(&t)?)))
+}
+
+fn parse_param(text: &str) -> Result<Param, String> {
+    Param::parse(&text.trim().to_ascii_lowercase())
+        .ok_or_else(|| format!("'{text}' cannot be animated; try gain, pan or speed"))
+}
+
+/// A keyframe value in the unit of its parameter: dB (or `-inf`), percent, or a speed ratio.
+fn parse_value(param: Param, text: &str) -> Result<f64, String> {
+    let t = text.trim();
+    let t = match param {
+        Param::Gain => t.trim_end_matches("dB").trim_end_matches("db").trim(),
+        Param::Pan => t.trim_end_matches('%').trim(),
+        Param::Speed => t.trim_end_matches('x').trim(),
+    };
+    if param == Param::Gain && t.eq_ignore_ascii_case("-inf") {
+        return Ok(param.range().0);
+    }
+    t.parse::<f64>()
+        .map_err(|_| format!("'{text}' is not a number for {param}"))
 }
 
 fn secs(s: f64) -> Time {
@@ -600,6 +657,44 @@ pub fn run(args: TimelineArgs) -> CliResult {
             save(&ed, &path, before)?;
             println!("{id}");
         }
+        Cmd::Key {
+            target,
+            param,
+            at,
+            value,
+            interp,
+        } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let target = parse_target(ed.project(), seq, &target)?;
+            let param = parse_param(&param)?;
+            let v = parse_value(param, &value)?;
+            let interp = Interp::parse(&interp).ok_or("interp must be hold, linear or smooth")?;
+            ed.set_keyframe(seq, target, param, secs(at), v, interp, LinkMode::Follow)?;
+            save(&ed, &path, before)?;
+            println!("{param} {v}{} at {}", param.unit(), secs(at));
+        }
+        Cmd::Unkey { target, param, at } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let target = parse_target(ed.project(), seq, &target)?;
+            let param = parse_param(&param)?;
+            ed.remove_keyframe(seq, target, param, secs(at), LinkMode::Follow)?;
+            save(&ed, &path, before)?;
+            println!("removed");
+        }
+        Cmd::ClearKeys { target, param } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let target = parse_target(ed.project(), seq, &target)?;
+            let param = parse_param(&param)?;
+            ed.clear_animation(seq, target, param, LinkMode::Follow)?;
+            save(&ed, &path, before)?;
+            println!("cleared");
+        }
         Cmd::Show => {
             let p = Project::load(&path)?;
             println!("{}", p.name);
@@ -624,11 +719,19 @@ pub fn run(args: TimelineArgs) -> CliResult {
                         if t.locked { " locked" } else { "" },
                         if t.enabled { "" } else { " off" }
                     );
-                    println!("  {}{flags}", t.name);
+                    let anim: String = t
+                        .anim
+                        .iter()
+                        .map(|(p, c)| format!(" {p}:{}keys", c.len()))
+                        .collect();
+                    println!("  {}{flags}{anim}", t.name);
                     for c in t.clips() {
                         let mut notes = String::new();
-                        if !c.speed.is_normal() {
+                        if !c.speed.is_normal() && !c.is_ramped() {
                             notes += &format!(" {}", c.speed);
+                        }
+                        for (param, curve) in c.anim.iter() {
+                            notes += &format!(" {param}:{}keys", curve.len());
                         }
                         if c.reverse {
                             notes += " reversed";
@@ -653,6 +756,9 @@ pub fn run(args: TimelineArgs) -> CliResult {
                             notes
                         );
                     }
+                }
+                for (param, curve) in s.master_anim.iter() {
+                    println!("  master {param}: {} keys", curve.len());
                 }
                 for m in s.markers() {
                     println!(

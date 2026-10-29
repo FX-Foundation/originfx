@@ -16,8 +16,8 @@
    speed, because speed zero cannot be a fraction.
 2. **Frame blending and optical flow for slow motion.** Today slow motion repeats frames, which stutters at 25% and below.
    Blending is cheap; optical-flow interpolation is an Effects engine job.
-3. **Speed ramps.** A speed that changes over a clip (slow, then fast). Needs the Keyframe engine for the curve; the clip model
-   will then map time through an integral instead of a single factor.
+3. ~~**Speed ramps.**~~ Done in the [Keyframe Engine](../keyframe-engine/README.md): the clip model maps time through the
+   integral of a speed curve. Frame blending (item 2) matters more now, since ramps slow down smoothly.
 4. **Fade in and fade out at the head and tail of a clip.** A transition with only one clip (from or to black or nothing).
    Today a dip needs a neighbour.
 5. **Transitions between clips on different tracks** (an overlap, as in a cross dissolve done with layers) and across a gap.
@@ -33,7 +33,7 @@
 
 | Item | Engine |
 |---|---|
-| Animated values (speed ramps, transition curves) | Keyframe |
+| Animated transition curves | Keyframe (speed ramps are done) |
 | Optical-flow slow motion, blurs, glows | Effects |
 | Opacity, blend modes, transforms | Compositing |
 | Pitch shifting, sound effects | Audio (see its [roadmap](../audio-engine/ROADMAP.md)) |
