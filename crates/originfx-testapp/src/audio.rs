@@ -78,13 +78,13 @@ fn open_stream(queue: Arc<Mutex<VecDeque<f32>>>) -> Result<(cpal::Stream, String
     let err = |e: cpal::Error| eprintln!("audio stream error: {e}");
     let stream = match fmt {
         cpal::SampleFormat::F32 => device.build_output_stream(
-            config.clone(),
+            config,
             move |data: &mut [f32], _| fill(data, channels, &queue, |v| v),
             err,
             None,
         ),
         cpal::SampleFormat::I16 => device.build_output_stream(
-            config.clone(),
+            config,
             move |data: &mut [i16], _| fill(data, channels, &queue, |v| (v * 32767.0) as i16),
             err,
             None,
