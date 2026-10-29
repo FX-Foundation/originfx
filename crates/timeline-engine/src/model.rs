@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use im::{OrdMap, Vector};
 
@@ -47,6 +48,14 @@ pub struct NewAsset {
     pub duration: Option<Time>,
     pub video: Vec<VideoProps>,
     pub audio: Vec<AudioProps>,
+}
+
+/// An effect that does something at one moment, with its settings worked out.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LiveEffect {
+    Builtin(effects_engine::Kind, Vec<f64>),
+    /// An effect from a plugin; the renderer finds the plugin by `spec.id`.
+    Plugin(Arc<crate::effects::PluginSpec>, Vec<f64>),
 }
 
 /// A media file known to the project.
@@ -189,12 +198,21 @@ impl Clip {
     }
 
     /// The effects that change the picture, with their settings at timeline time `t`, in order.
-    pub fn live_effects_at(&self, t: Time) -> Vec<(effects_engine::Kind, Vec<f64>)> {
+    pub fn live_effects_at(&self, t: Time) -> Vec<LiveEffect> {
         self.effects
             .iter()
             .filter(|e| e.is_live())
-            .map(|e| (e.kind, self.effect_values_at(e, t)))
-            .filter(|(k, v)| !effects_engine::is_neutral(*k, v))
+            .map(|e| {
+                let v = self.effect_values_at(e, t);
+                match &e.plugin {
+                    Some(p) => LiveEffect::Plugin(Arc::clone(p), v),
+                    None => LiveEffect::Builtin(e.kind, v),
+                }
+            })
+            .filter(|e| match e {
+                LiveEffect::Builtin(k, v) => !effects_engine::is_neutral(*k, v),
+                LiveEffect::Plugin(..) => true,
+            })
             .collect()
     }
 
@@ -947,7 +965,7 @@ impl Sequence {
                             return bad(format!("{} has {} twice", clip.id, e.id));
                         }
                         if let Some(p) = e.problem(clip.duration.ticks()) {
-                            return bad(format!("{} {} ({}): {p}", clip.id, e.id, e.kind));
+                            return bad(format!("{} {} ({}): {p}", clip.id, e.id, e.label()));
                         }
                     }
                     if kind == TrackKind::Video

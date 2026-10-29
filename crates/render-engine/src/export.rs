@@ -34,6 +34,8 @@ pub struct ExportOptions {
     /// Go through a lossless working file on disk (large) and keep it afterwards, instead of
     /// streaming. For debugging, and for rendering once to export several times.
     pub keep_working_file: bool,
+    /// The installed plugins, for plugin effects.
+    pub plugins: Option<std::sync::Arc<plugin_engine::Host>>,
 }
 
 /// Which stage an export is in.
@@ -212,6 +214,9 @@ pub fn export_with_source<S: MediaSource>(
 ) -> Result<RenderReport> {
     let output = output.as_ref();
     let mut renderer = Renderer::new(project, seq, source, options.render)?;
+    if let Some(h) = &options.plugins {
+        renderer = renderer.with_plugins(std::sync::Arc::clone(h));
+    }
     let s = renderer.sequence().clone();
     let rate = s.frame_rate;
 

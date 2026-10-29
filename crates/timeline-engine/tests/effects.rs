@@ -222,7 +222,10 @@ fn live_effects_skip_disabled_and_neutral_ones() {
     // Brightness at its default does nothing; invert at its default does.
     let live = clip.live_effects_at(secs(1.0));
     assert_eq!(live.len(), 1);
-    assert_eq!(live[0].0, EffectKind::Invert);
+    assert!(matches!(
+        live[0],
+        LiveEffect::Builtin(EffectKind::Invert, _)
+    ));
     f.ed.set_effect_enabled(f.seq, f.v, b, false).unwrap();
     assert!(f.clip(f.v).live_effects_at(secs(1.0)).is_empty());
     f.ed.set_effect_value(f.seq, f.v, a, "amount", 10.0)

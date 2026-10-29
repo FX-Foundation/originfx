@@ -12,8 +12,9 @@ use timeline_engine::media::probe_asset;
 use timeline_engine::{
     Align, Alignment, AssetId, ClipAudio, ClipId, Colour, Edge, Editor, EffectId, EffectKind, Fade,
     FadeCurve, Fill, FrameRate, Gain, Generator, Interp, LinkMode, MarkerColour, Pan, Param,
-    PlaceMode, Project, Ripple, SequenceId, SequenceSettings, Shadow, Shape, ShapeKind, Speed,
-    SpeedMode, Stroke, Target, Text, Time, TrackKind, TrackUpdate, Transition, TransitionKind,
+    PlaceMode, PluginSpec, Project, Ripple, SequenceId, SequenceSettings, Setting, Shadow, Shape,
+    ShapeKind, Speed, SpeedMode, Stroke, Target, Text, Time, TrackKind, TrackUpdate, Transition,
+    TransitionKind,
 };
 
 use crate::CliResult;
@@ -485,9 +486,13 @@ enum FxCmd {
     /// Add an effect to a picture clip (at the end of its stack, or `--at` a position).
     Add {
         clip: String,
+        /// A built-in effect (see `effect kinds`) or `plugin:<id>` for an installed plugin.
         kind: String,
         #[arg(long)]
         at: Option<usize>,
+        /// The folder of plugins, for `plugin:` effects. Default: $ORIGINFX_PLUGINS or ./plugins.
+        #[arg(long)]
+        plugins: Option<PathBuf>,
     },
     /// Remove an effect from a clip.
     Remove { clip: String, effect: String },
@@ -1139,11 +1144,43 @@ pub fn run(args: TimelineArgs) -> CliResult {
                 let seq = first_sequence(ed.project())?;
                 match other {
                     FxCmd::Kinds => {}
-                    FxCmd::Add { clip, kind, at } => {
-                        let k = EffectKind::parse(&kind.to_ascii_lowercase()).ok_or_else(|| {
-                            format!("unknown effect '{kind}'; see `effect kinds`")
-                        })?;
-                        let id = ed.add_effect(seq, ClipId(id_number(&clip)?), k, at)?;
+                    FxCmd::Add {
+                        clip,
+                        kind,
+                        at,
+                        plugins,
+                    } => {
+                        let clip = ClipId(id_number(&clip)?);
+                        let id = if let Some(pid) = kind.strip_prefix("plugin:") {
+                            let host = crate::plugin::host(plugins)?;
+                            let p = host.get(pid).map_err(|e| {
+                                format!("{e}; see `originfx plugin list` (use --plugins DIR)")
+                            })?;
+                            let m = p.manifest();
+                            let spec = PluginSpec {
+                                id: m.id.clone(),
+                                name: m.name.clone(),
+                                version: m.version.clone(),
+                                settings: m
+                                    .params
+                                    .iter()
+                                    .map(|d| Setting {
+                                        name: d.name.clone(),
+                                        unit: d.unit.clone(),
+                                        default: d.default,
+                                        min: d.min,
+                                        max: d.max,
+                                    })
+                                    .collect(),
+                            };
+                            ed.add_plugin_effect(seq, clip, spec, at)?
+                        } else {
+                            let k =
+                                EffectKind::parse(&kind.to_ascii_lowercase()).ok_or_else(|| {
+                                    format!("unknown effect '{kind}'; see `effect kinds`")
+                                })?;
+                            ed.add_effect(seq, clip, k, at)?
+                        };
                         println!("{id}");
                     }
                     FxCmd::Remove { clip, effect } => {
@@ -1300,7 +1337,7 @@ pub fn run(args: TimelineArgs) -> CliResult {
                             notes += &format!(
                                 " [{} {}{}]",
                                 e.id,
-                                e.kind,
+                                e.label(),
                                 if e.enabled { "" } else { " off" }
                             );
                         }

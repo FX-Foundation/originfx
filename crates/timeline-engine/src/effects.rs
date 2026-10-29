@@ -7,6 +7,7 @@
 //! measured from the start of the clip, like the clip's own animation.
 
 use std::fmt;
+use std::sync::Arc;
 
 pub use effects_engine::Kind as EffectKind;
 pub use effects_engine::ParamSpec;
@@ -26,11 +27,76 @@ impl fmt::Display for EffectId {
     }
 }
 
+/// One setting of an effect, by value (built-in effects and plugins alike).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Setting {
+    pub name: String,
+    pub unit: String,
+    pub default: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Eq for Setting {}
+
+/// An effect that comes from a plugin: who it is and what settings it has. The project keeps
+/// this copy so it can be edited, checked and saved without the plugin installed; the plugin
+/// itself is only needed to render.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginSpec {
+    /// The plugin's unique id, like `com.example.glow`.
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub settings: Vec<Setting>,
+}
+
+impl Eq for PluginSpec {}
+
+/// The most settings a plugin effect can have.
+pub const MAX_PLUGIN_SETTINGS: usize = 16;
+
+impl PluginSpec {
+    /// The rules for a plugin's description (also applied to files).
+    pub fn problem(&self) -> Option<String> {
+        let word = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        };
+        if !word(&self.id) {
+            return Some("a plugin id is 1 to 64 letters, digits, '.', '-' or '_'".into());
+        }
+        if self.name.is_empty() || self.name.len() > 100 || self.version.len() > 64 {
+            return Some("a plugin needs a name of 1 to 100 characters".into());
+        }
+        if self.settings.len() > MAX_PLUGIN_SETTINGS {
+            return Some(format!(
+                "a plugin has at most {MAX_PLUGIN_SETTINGS} settings"
+            ));
+        }
+        for (i, s) in self.settings.iter().enumerate() {
+            if !word(&s.name) || self.settings[..i].iter().any(|o| o.name == s.name) {
+                return Some(format!("setting {i} needs a unique simple name"));
+            }
+            let ok = s.default.is_finite() && s.min.is_finite() && s.max.is_finite();
+            if !ok || s.min > s.max || s.default < s.min || s.default > s.max || s.unit.len() > 16 {
+                return Some(format!("setting '{}' has a bad range", s.name));
+            }
+        }
+        None
+    }
+}
+
 /// One effect on a clip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Effect {
     pub id: EffectId,
+    /// For a plugin effect this is a placeholder and is never used: look at `plugin` first.
     pub kind: EffectKind,
+    /// Set when the effect comes from a plugin.
+    pub plugin: Option<Arc<PluginSpec>>,
     /// A disabled effect stays in the stack but does nothing.
     pub enabled: bool,
     pub(crate) values: Vec<f64>,
@@ -46,9 +112,57 @@ impl Effect {
         Effect {
             id,
             kind,
+            plugin: None,
             enabled: true,
             values: kind.defaults(),
             curves: vec![None; n],
+        }
+    }
+
+    pub(crate) fn new_plugin(id: EffectId, spec: PluginSpec) -> Effect {
+        let n = spec.settings.len();
+        Effect {
+            id,
+            kind: EffectKind::Invert,
+            enabled: true,
+            values: spec.settings.iter().map(|s| s.default).collect(),
+            curves: vec![None; n],
+            plugin: Some(Arc::new(spec)),
+        }
+    }
+
+    /// The effect's name for display: `blur`, or `plugin:com.example.glow`.
+    pub fn label(&self) -> String {
+        match &self.plugin {
+            Some(p) => format!("plugin:{}", p.id),
+            None => self.kind.name().to_string(),
+        }
+    }
+
+    /// The effect's settings, in order.
+    pub fn settings(&self) -> Vec<Setting> {
+        match &self.plugin {
+            Some(p) => p.settings.clone(),
+            None => self
+                .kind
+                .params()
+                .iter()
+                .map(|s| Setting {
+                    name: s.name.to_string(),
+                    unit: s.unit.to_string(),
+                    default: s.default,
+                    min: s.min,
+                    max: s.max,
+                })
+                .collect(),
+        }
+    }
+
+    /// The position of the setting called `name`.
+    pub fn setting_index(&self, name: &str) -> Option<usize> {
+        match &self.plugin {
+            Some(p) => p.settings.iter().position(|s| s.name == name),
+            None => self.kind.param_index(name),
         }
     }
 
@@ -56,6 +170,7 @@ impl Effect {
     pub(crate) fn from_parts(
         id: EffectId,
         kind: EffectKind,
+        plugin: Option<PluginSpec>,
         enabled: bool,
         values: Vec<f64>,
         curves: Vec<Option<Curve>>,
@@ -63,6 +178,7 @@ impl Effect {
         Effect {
             id,
             kind,
+            plugin: plugin.map(Arc::new),
             enabled,
             values,
             curves,
@@ -98,7 +214,8 @@ impl Effect {
     /// moment (a curve is assumed to leave neutral at some point).
     pub fn is_live(&self) -> bool {
         self.enabled
-            && (self.curves.iter().any(Option::is_some)
+            && (self.plugin.is_some()
+                || self.curves.iter().any(Option::is_some)
                 || !effects_engine::is_neutral(self.kind, &self.values))
     }
 
@@ -115,7 +232,12 @@ impl Effect {
 
     /// The first problem with the effect, if any, for a clip lasting `max` ticks.
     pub(crate) fn problem(&self, max: i64) -> Option<String> {
-        let specs = self.kind.params();
+        if let Some(p) = &self.plugin {
+            if let Some(m) = p.problem() {
+                return Some(m);
+            }
+        }
+        let specs = self.settings();
         if self.values.len() != specs.len() || self.curves.len() != specs.len() {
             return Some("has the wrong number of settings".into());
         }

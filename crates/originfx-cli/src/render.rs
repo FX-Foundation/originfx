@@ -96,6 +96,9 @@ pub struct RenderArgs {
     /// Keep the working file (lossless, large) instead of deleting it.
     #[arg(long)]
     keep_working_file: bool,
+    /// The folder of plugins (`.wasm`), for plugin effects. Default: $ORIGINFX_PLUGINS or ./plugins.
+    #[arg(long)]
+    plugins: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -113,6 +116,9 @@ pub struct FrameArgs {
     fit: FitArg,
     #[arg(long)]
     allow_offline: bool,
+    /// The folder of plugins (`.wasm`), for plugin effects. Default: $ORIGINFX_PLUGINS or ./plugins.
+    #[arg(long)]
+    plugins: Option<PathBuf>,
 }
 
 fn pick_sequence(p: &Project, wanted: Option<u64>) -> Result<SequenceId, String> {
@@ -177,6 +183,7 @@ pub fn run(a: RenderArgs) -> CliResult {
         range,
         temp_dir: a.temp_dir.clone(),
         keep_working_file: a.keep_working_file,
+        plugins: Some(crate::plugin::host(a.plugins.clone())?),
     };
 
     let tty = std::io::stderr().is_terminal();
@@ -225,7 +232,8 @@ pub fn run_frame(a: FrameArgs) -> CliResult {
         missing_media: missing(a.allow_offline),
         ..Default::default()
     };
-    let mut r = Renderer::new(&project, seq, FileSource::new(), settings)?;
+    let mut r = Renderer::new(&project, seq, FileSource::new(), settings)?
+        .with_plugins(crate::plugin::host(a.plugins.clone())?);
     let frame = r.frame_at(Time::from_secs_f64(a.at))?;
     png::write_rgba(&a.out, frame.width, frame.height, &frame.data)?;
     println!(

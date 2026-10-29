@@ -95,4 +95,12 @@ Each engine has its own folder with the same set of pages.
 | [DECISIONS.md](motion-graphics-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
 | [TRY_IT.md](motion-graphics-engine/TRY_IT.md) | Checklist for trying it on your own machine |
 
-The other engines get their own folders as they are built.
+### Plugin Engine (done)
+
+| Document | What it is |
+|---|---|
+| [README.md](plugin-engine/README.md) | Full guide: the sandbox, using and writing plugins, the interface, command line |
+| [ROADMAP.md](plugin-engine/ROADMAP.md) | What is next and what belongs to other engines |
+| [DECISIONS.md](plugin-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
+| [TRY_IT.md](plugin-engine/TRY_IT.md) | Checklist for trying it on your own machine |
+
