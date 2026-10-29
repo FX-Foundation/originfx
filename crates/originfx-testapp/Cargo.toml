@@ -1,0 +1,21 @@
+[package]
+name = "originfx-testapp"
+description = "OriginFX test app: a small window to play, poke and check everything the engines do"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "originfx-testapp"
+path = "src/main.rs"
+
+[dependencies]
+originfx-media-engine = { path = "../media-engine" }
+originfx-timeline-engine = { path = "../timeline-engine", features = ["media"] }
+originfx-render-engine = { path = "../render-engine" }
+originfx-plugin-engine = { path = "../plugin-engine", features = ["example"] }
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
