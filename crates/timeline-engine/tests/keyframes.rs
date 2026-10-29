@@ -490,7 +490,7 @@ fn animation_survives_saving_and_loading() {
     let text = f.ed.project().to_json().unwrap();
     let back = Project::from_json(&text).unwrap();
     assert!(&back == f.ed.project());
-    assert!(text.contains("\"version\": 4"));
+    assert!(text.contains(&format!("\"version\": {}", file::FORMAT_VERSION)));
     // A project with no animation writes none of it.
     let plain = Editor::new("p");
     assert!(!plain.project().to_json().unwrap().contains("anim"));
@@ -539,11 +539,10 @@ fn damaged_animation_is_refused_on_load() {
 fn files_from_before_keyframes_still_load() {
     let mut f = fx();
     f.audio_clip(0.0, 5.0);
-    let text =
-        f.ed.project()
-            .to_json()
-            .unwrap()
-            .replace("\"version\": 4", "\"version\": 3");
+    let text = f.ed.project().to_json().unwrap().replace(
+        &format!("\"version\": {}", file::FORMAT_VERSION),
+        "\"version\": 3",
+    );
     let p = Project::from_json(&text).unwrap();
     assert!(p
         .sequence(f.seq)

@@ -15,6 +15,7 @@ use im::{OrdMap, Vector};
 
 use crate::animation::{Animation, Param};
 use crate::audio::{Fade, Gain, Pan};
+use crate::effects::{Effect, MAX_EFFECTS};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
 use crate::retime::{Speed, Transition, MAX_TRANSITION_SECS};
@@ -130,6 +131,8 @@ pub struct Clip {
     /// Keyframed values, with times measured from the start of the clip. An animated value
     /// replaces its fixed field (`speed`, `gain`, `pan`).
     pub anim: Animation,
+    /// Picture clips only: the effect stack, applied in order (first is applied first).
+    pub effects: Vec<Effect>,
 }
 
 /// Media is allowed to overshoot its length by this much (a few ticks), so that rounding in
@@ -163,6 +166,21 @@ impl Clip {
             None => self.speed.media_len(off),
             Some(curve) => Time::from_ticks(curve.integral(off.ticks()).round() as i64),
         }
+    }
+
+    /// The settings of `effect` at timeline time `t`.
+    pub fn effect_values_at(&self, effect: &Effect, t: Time) -> Vec<f64> {
+        effect.values_at((t - self.start).ticks())
+    }
+
+    /// The effects that change the picture, with their settings at timeline time `t`, in order.
+    pub fn live_effects_at(&self, t: Time) -> Vec<(effects_engine::Kind, Vec<f64>)> {
+        self.effects
+            .iter()
+            .filter(|e| e.is_live())
+            .map(|e| (e.kind, self.effect_values_at(e, t)))
+            .filter(|(k, v)| !effects_engine::is_neutral(*k, v))
+            .collect()
     }
 
     /// True if the clip has a speed ramp.
@@ -244,9 +262,9 @@ impl Clip {
         } else {
             self.source_in + self.media_len(start - self.start)
         };
-        c.anim = self
-            .anim
-            .slice((start - self.start).ticks(), (end - self.start).ticks());
+        let (a, b) = ((start - self.start).ticks(), (end - self.start).ticks());
+        c.anim = self.anim.slice(a, b);
+        c.effects = self.effects.iter().map(|e| e.slice(a, b)).collect();
         c
     }
 
@@ -821,6 +839,21 @@ impl Sequence {
                     };
                     if let Some(p) = clip.anim.problem(allowed, Some(clip.duration.ticks())) {
                         return bad(format!("{}: {p}", clip.id));
+                    }
+                    if kind == TrackKind::Audio && !clip.effects.is_empty() {
+                        return bad(format!("{} is a sound clip with picture effects", clip.id));
+                    }
+                    if clip.effects.len() > MAX_EFFECTS {
+                        return bad(format!("{} has more than {MAX_EFFECTS} effects", clip.id));
+                    }
+                    let mut seen = HashSet::new();
+                    for e in &clip.effects {
+                        if !seen.insert(e.id) {
+                            return bad(format!("{} has {} twice", clip.id, e.id));
+                        }
+                        if let Some(p) = e.problem(clip.duration.ticks()) {
+                            return bad(format!("{} {} ({}): {p}", clip.id, e.id, e.kind));
+                        }
                     }
                     if kind == TrackKind::Video
                         && (!clip.gain.is_unity()

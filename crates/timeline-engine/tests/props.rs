@@ -95,6 +95,13 @@ enum Op {
         clear: bool,
         offset: i64,
     },
+    Fx {
+        pick: usize,
+        action: u8,
+        kind: u8,
+        value: i32,
+        offset: i64,
+    },
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -174,6 +181,15 @@ fn op() -> impl Strategy<Value = Op> {
             }
         }),
         (0i64..300, -12000i32..2400).prop_map(|(at, value)| Op::KeyMaster { at, value }),
+        (0usize..50, 0u8..6, 0u8..14, -500i32..500, 0i64..80).prop_map(
+            |(pick, action, kind, value, offset)| Op::Fx {
+                pick,
+                action,
+                kind,
+                value,
+                offset
+            }
+        ),
         (0usize..50, 0u8..3, any::<bool>(), 0i64..80).prop_map(|(pick, param, clear, offset)| {
             Op::Unkey {
                 pick,
@@ -278,6 +294,27 @@ proptest! {
                     } else {
                         let at = before.sequence(seq).unwrap().find_clip(id).map_or(Time::ZERO, |(_, c)| c.start) + frames(offset);
                         ed.remove_keyframe(seq, Target::Clip(id), param, at, LinkMode::Follow)
+                    }
+                }
+                Op::Fx { pick: p, action, kind, value, offset } => {
+                    let id = pick(p);
+                    let clip = before.sequence(seq).unwrap().find_clip(id).map(|(_, c)| c.clone());
+                    let first = clip.as_ref().and_then(|c| c.effects.first().map(|e| (e.id, e.kind)));
+                    let start = clip.as_ref().map_or(Time::ZERO, |c| c.start);
+                    match (action, first) {
+                        (0, _) => ed.add_effect(seq, id, EffectKind::ALL[kind as usize], None).map(|_| ()),
+                        (1, Some((e, _))) => ed.remove_effect(seq, id, e),
+                        (2, Some((e, k))) => {
+                            let spec = k.params()[0];
+                            ed.set_effect_value(seq, id, e, spec.name, spec.min + (spec.max - spec.min) * f64::from(value + 500) / 1000.0)
+                        }
+                        (3, Some((e, k))) => {
+                            let spec = k.params()[0];
+                            ed.key_effect(seq, id, e, spec.name, start + frames(offset), spec.min + (spec.max - spec.min) * f64::from(value + 500) / 1000.0, Interp::Smooth)
+                        }
+                        (4, Some((e, _))) => ed.set_effect_enabled(seq, id, e, value > 0),
+                        (5, Some((e, k))) => ed.clear_effect_animation(seq, id, e, k.params()[0].name),
+                        _ => Ok(()),
                     }
                 }
                 Op::RangeDelete { a, b } => match TimeRange::new(frames(a.min(b)), frames(a.max(b))) {
