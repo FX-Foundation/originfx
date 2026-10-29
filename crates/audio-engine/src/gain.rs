@@ -51,7 +51,7 @@ pub fn apply_gain_pan(samples: &mut [f32], gain: f32, pan: f32) {
     if l == 1.0 && r == 1.0 {
         return;
     }
-    for frame in samples.chunks_exact_mut(2) {
+    for frame in samples.as_chunks_mut::<2>().0 {
         frame[0] *= l;
         frame[1] *= r;
     }
@@ -60,7 +60,7 @@ pub fn apply_gain_pan(samples: &mut [f32], gain: f32, pan: f32) {
 /// Apply a gain and pan that change from one sample frame to the next. `at(i)` gives the linear
 /// gain and the pan (-1 to 1) for frame `i` of `samples`.
 pub fn apply_gain_pan_with(samples: &mut [f32], mut at: impl FnMut(usize) -> (f32, f32)) {
-    for (i, frame) in samples.chunks_exact_mut(2).enumerate() {
+    for (i, frame) in samples.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         let (gain, pan) = at(i);
         let (l, r) = pan_gains(pan);
         frame[0] *= l * gain;
