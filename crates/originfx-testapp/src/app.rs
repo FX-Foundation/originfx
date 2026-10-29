@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use plugin_engine::Host;
-use timeline_engine::{ClipSpec, Editor, PlaceMode, Project, SequenceId, SequenceSettings, Time};
+use timeline_engine::{Editor, PlaceMode, Project, SequenceId, SequenceSettings, Time};
 
 use crate::audio::Audio;
 use crate::inspector;
@@ -27,6 +27,9 @@ pub struct App {
     seq: Option<SequenceId>,
     worker: Option<Worker>,
     audio: Audio,
+    gpu: bool,
+    /// Preview at 1/this of the sequence size (1 = full).
+    div: u32,
     texture: Option<TextureHandle>,
     plugins: Arc<Host>,
     path_text: String,
@@ -62,6 +65,8 @@ impl App {
             seq: None,
             worker: None,
             audio: Audio::new(),
+            gpu: false,
+            div: 1,
             texture: None,
             plugins: Arc::new(host),
             path_text: String::new(),
@@ -101,23 +106,34 @@ impl App {
                 .video
                 .first()
                 .map_or((1280, 720), |v| (v.width, v.height));
+            // Keep the picture's shape; shrink only if it is bigger than 1080p.
+            let k = (1920.0 / f64::from(w)).min(1920.0 / f64::from(h)).min(1.0);
+            let even = |n: f64| ((n * k / 2.0).round() as u32 * 2).max(2);
+            let (w, h) = (even(f64::from(w)), even(f64::from(h)));
             let mut ed = Editor::new("test");
             let seq = ed
                 .add_sequence(SequenceSettings {
-                    width: w.min(1920),
-                    height: h.min(1080),
+                    width: w,
+                    height: h,
                     ..Default::default()
                 })
                 .map_err(|e| e.to_string())?;
+            let has_audio = !asset.audio.is_empty();
             let id = ed.add_asset(asset).map_err(|e| e.to_string())?;
-            let v1 = ed
-                .project()
-                .sequence(seq)
-                .ok_or("no sequence")?
-                .video_tracks()[0]
-                .id;
-            ed.place_clip(seq, v1, ClipSpec::new(id, Time::ZERO), PlaceMode::Overwrite)
-                .map_err(|e| e.to_string())?;
+            let s = ed.project().sequence(seq).ok_or("no sequence")?;
+            let v1 = s.video_tracks()[0].id;
+            let a1 = s.audio_tracks().front().map(|t| t.id).filter(|_| has_audio);
+            ed.place_asset(
+                seq,
+                id,
+                Time::ZERO,
+                Time::ZERO,
+                None,
+                Some(v1),
+                a1,
+                PlaceMode::Overwrite,
+            )
+            .map_err(|e| e.to_string())?;
             Ok((ed, seq))
         })();
         match result {
@@ -155,9 +171,10 @@ impl App {
     fn refresh_worker(&mut self) {
         if let Some(seq) = self.seq {
             self.worker = Some(Worker::new(
-                self.editor.project().clone(),
+                scaled(self.editor.project(), self.div),
                 seq,
                 Arc::clone(&self.plugins),
+                self.gpu,
             ));
             self.shown_index = -1;
             self.asked_index = -1;
@@ -183,6 +200,38 @@ impl App {
             .and_then(|s| self.editor.project().sequence(s))
             .map_or(24.0, |s| s.frame_rate.as_f64())
     }
+}
+
+/// The project with every sequence drawn at 1/`div` of its size. Everything else in the project
+/// is measured in percent of the frame, so it looks the same, only smaller and faster.
+fn scaled(p: &Project, div: u32) -> Project {
+    if div <= 1 {
+        return p.clone();
+    }
+    fn walk(v: &mut serde_json::Value, div: u64) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if m.contains_key("sample_rate") {
+                    for k in ["width", "height"] {
+                        if let Some(n) = m.get(k).and_then(serde_json::Value::as_u64) {
+                            m.insert(k.into(), ((n / div / 2) * 2).max(2).into());
+                        }
+                    }
+                }
+                m.values_mut().for_each(|x| walk(x, div));
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(|x| walk(x, div)),
+            _ => {}
+        }
+    }
+    let Ok(text) = p.to_json() else {
+        return p.clone();
+    };
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return p.clone();
+    };
+    walk(&mut v, u64::from(div));
+    Project::from_json(&v.to_string()).unwrap_or_else(|_| p.clone())
 }
 
 fn timecode(s: f64, fps: f64) -> String {
@@ -317,6 +366,29 @@ impl eframe::App for App {
                         };
                         self.project_path = Some(p);
                     }
+                }
+                ui.separator();
+                if ui
+                    .checkbox(&mut self.gpu, "GPU decode")
+                    .on_hover_text("Decode video on the graphics card when it can")
+                    .changed()
+                {
+                    self.refresh_worker();
+                }
+                let before = self.div;
+                egui::ComboBox::from_id_salt("pq")
+                    .selected_text(match self.div {
+                        1 => "Preview: full",
+                        2 => "Preview: half",
+                        _ => "Preview: quarter",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.div, 1, "full size (sharp, slower)");
+                        ui.selectable_value(&mut self.div, 2, "half size");
+                        ui.selectable_value(&mut self.div, 4, "quarter size (fastest)");
+                    });
+                if self.div != before {
+                    self.refresh_worker();
                 }
                 ui.separator();
                 ui.label("or path:");
@@ -482,5 +554,30 @@ impl eframe::App for App {
                 });
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smaller_preview_halves_the_sequence_only() {
+        let mut ed = Editor::new("t");
+        let seq = ed
+            .add_sequence(SequenceSettings {
+                width: 640,
+                height: 360,
+                ..Default::default()
+            })
+            .unwrap();
+        let half = scaled(ed.project(), 2);
+        let s = half.sequence(seq).unwrap();
+        assert_eq!((s.width, s.height), (320, 180));
+        let quarter = scaled(ed.project(), 4);
+        let s = quarter.sequence(seq).unwrap();
+        assert_eq!((s.width, s.height), (160, 90));
+        let full = scaled(ed.project(), 1);
+        assert_eq!(full.sequence(seq).unwrap().width, 640);
     }
 }

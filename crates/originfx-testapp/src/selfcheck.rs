@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use media_engine::{hwaccel, probe, ExportPreset, ExportSettings, Quality, VideoFrame};
+use media_engine::{
+    hwaccel, probe, DecodeOptions, ExportPreset, ExportSettings, HwPolicy, Quality, VideoFrame,
+};
 use plugin_engine::{Host, Plugin};
 use render_engine::{
     export_sequence, ExportOptions, FileSource, MediaSource, RenderSettings, Renderer,
@@ -428,36 +430,10 @@ fn check_hardware() -> Result<String, String> {
     Ok(format!("information only\n{}", lines.join("\n")))
 }
 
-fn check_clip(path: &Path) -> Result<String, String> {
-    let info = probe(path).map_err(|e| e.to_string())?;
-    let v = info.primary_video().ok_or("the file has no picture")?;
-    let asset = timeline_engine::media::probe_asset(path).map_err(|e| e.to_string())?;
-    let mut ed = Editor::new("clip check");
-    let seq = ed
-        .add_sequence(SequenceSettings {
-            width: v.width.min(1920),
-            height: v.height.min(1080),
-            ..Default::default()
-        })
+fn time_frames(ed: &Editor, seq: SequenceId, hw: HwPolicy) -> Result<(f64, f64, u32, u32), String> {
+    let source = FileSource::new().with_decode(DecodeOptions { hw });
+    let mut r = Renderer::new(ed.project(), seq, source, RenderSettings::default())
         .map_err(|e| e.to_string())?;
-    let id = ed.add_asset(asset).map_err(|e| e.to_string())?;
-    let v1 = ed
-        .project()
-        .sequence(seq)
-        .ok_or("no sequence")?
-        .video_tracks()[0]
-        .id;
-    let mut s = ClipSpec::new(id, secs(0.0));
-    s.duration = Some(secs(3.0));
-    ed.place_clip(seq, v1, s, PlaceMode::Overwrite)
-        .map_err(|e| e.to_string())?;
-    let mut r = Renderer::new(
-        ed.project(),
-        seq,
-        FileSource::new(),
-        RenderSettings::default(),
-    )
-    .map_err(|e| e.to_string())?;
     let t = Instant::now();
     let first = r.frame(0).map_err(|e| e.to_string())?;
     let first_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -467,17 +443,88 @@ fn check_clip(path: &Path) -> Result<String, String> {
         r.frame(i).map_err(|e| e.to_string())?;
     }
     let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
-    Ok(format!(
-        "{} {}x{} {}: first frame {first_ms:.0} ms, then {per:.1} ms/frame ({:.0} fps) at {}x{}",
-        path.file_name()
-            .map_or(String::new(), |n| n.to_string_lossy().into()),
+    Ok((first_ms, per, first.width, first.height))
+}
+
+fn check_clip(path: &Path) -> Result<String, String> {
+    let info = probe(path).map_err(|e| e.to_string())?;
+    let v = info.primary_video().ok_or("the file has no picture")?;
+    let asset = timeline_engine::media::probe_asset(path).map_err(|e| e.to_string())?;
+    let has_audio = !asset.audio.is_empty();
+    let k = (1920.0 / f64::from(v.width))
+        .min(1920.0 / f64::from(v.height))
+        .min(1.0);
+    let even = |n: u32| ((f64::from(n) * k / 2.0).round() as u32 * 2).max(2);
+    let mut ed = Editor::new("clip check");
+    let seq = ed
+        .add_sequence(SequenceSettings {
+            width: even(v.width),
+            height: even(v.height),
+            ..Default::default()
+        })
+        .map_err(|e| e.to_string())?;
+    let id = ed.add_asset(asset).map_err(|e| e.to_string())?;
+    let s = ed.project().sequence(seq).ok_or("no sequence")?;
+    let v1 = s.video_tracks()[0].id;
+    let a1 = s.audio_tracks().front().map(|t| t.id).filter(|_| has_audio);
+    ed.place_asset(
+        seq,
+        id,
+        secs(0.0),
+        secs(0.0),
+        Some(secs(3.0)),
+        Some(v1),
+        a1,
+        PlaceMode::Overwrite,
+    )
+    .map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .map_or(String::new(), |n| n.to_string_lossy().into());
+    let mut out = format!(
+        "{name} {}x{} {} {}",
         v.width,
         v.height,
         v.codec,
-        1000.0 / per.max(0.001),
-        first.width,
-        first.height
-    ))
+        v.frame_rate
+            .map_or(String::new(), |r| format!("{:.2} fps", r.as_f64()))
+    );
+    let (first, per, w, h) = time_frames(&ed, seq, HwPolicy::Off)?;
+    out.push_str(&format!(
+        "\n    CPU decode: first frame {first:.0} ms, then {per:.1} ms/frame ({:.0} fps) at {w}x{h}",
+        1000.0 / per.max(0.001)
+    ));
+    match time_frames(&ed, seq, HwPolicy::Auto) {
+        Ok((first, per, _, _)) => out.push_str(&format!(
+            "\n    GPU decode: first frame {first:.0} ms, then {per:.1} ms/frame ({:.0} fps)",
+            1000.0 / per.max(0.001)
+        )),
+        Err(e) => out.push_str(&format!("\n    GPU decode: failed: {e}")),
+    }
+    if has_audio {
+        let mut r = Renderer::new(
+            ed.project(),
+            seq,
+            FileSource::new(),
+            RenderSettings::default(),
+        )
+        .map_err(|e| e.to_string())?;
+        let t = Instant::now();
+        let samples = r.audio_samples(0, 48_000).map_err(|e| e.to_string())?;
+        let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+        out.push_str(&format!(
+            "\n    Sound: 1 s of audio mixed in {:.0} ms, loudest sample {peak:.2}{}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            if peak < 0.001 {
+                "  (SILENT - no sound reached the mix)"
+            } else {
+                ""
+            }
+        ));
+    } else {
+        out.push_str("\n    Sound: this file has no audio track");
+    }
+    Ok(out)
 }
 
 type Check = (&'static str, fn() -> Result<String, String>);

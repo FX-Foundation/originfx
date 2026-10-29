@@ -2186,6 +2186,7 @@ dependencies = [
  "originfx-render-engine",
  "originfx-timeline-engine",
  "rfd",
+ "serde_json",
 ]
 
 [[package]]

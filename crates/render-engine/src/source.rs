@@ -9,7 +9,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use media_engine::{AudioDecoder, AudioOptions, FrameReader, VideoFrame};
+use media_engine::{AudioDecoder, AudioOptions, DecodeOptions, FrameReader, VideoFrame};
 use timeline_engine::{Asset, AssetId};
 
 use crate::error::{Error, Result};
@@ -40,6 +40,7 @@ pub struct FileSource {
     video: HashMap<AssetId, FrameReader>,
     audio: HashMap<AssetId, AudioCursor>,
     cache_bytes: usize,
+    decode: DecodeOptions,
 }
 
 impl Default for FileSource {
@@ -59,7 +60,15 @@ impl FileSource {
             video: HashMap::new(),
             audio: HashMap::new(),
             cache_bytes,
+            decode: DecodeOptions::default(),
         }
+    }
+
+    /// Decode video with these options (for example GPU decoding). Files already open keep
+    /// the options they were opened with.
+    pub fn with_decode(mut self, decode: DecodeOptions) -> Self {
+        self.decode = decode;
+        self
     }
 }
 
@@ -84,7 +93,11 @@ impl MediaSource for FileSource {
         }
         require_file(asset)?;
         if let Entry::Vacant(slot) = self.video.entry(asset.id) {
-            slot.insert(FrameReader::open(&asset.path, self.cache_bytes)?);
+            slot.insert(FrameReader::open_with(
+                &asset.path,
+                self.cache_bytes,
+                self.decode,
+            )?);
         }
         let reader = self.video.get_mut(&asset.id).expect("just inserted");
         // A still image is one frame held for as long as the edit needs.

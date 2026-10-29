@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use media_engine::VideoFrame;
+use media_engine::{DecodeOptions, HwPolicy, VideoFrame};
 use plugin_engine::Host;
 use render_engine::{FileSource, MissingMedia, RenderSettings, Renderer};
 use timeline_engine::{Project, SequenceId};
@@ -25,17 +25,25 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn new(project: Project, seq: SequenceId, plugins: Arc<Host>) -> Worker {
+    pub fn new(project: Project, seq: SequenceId, plugins: Arc<Host>, gpu: bool) -> Worker {
         let (tx, req) = channel::<i64>();
         let (out, rx) = channel::<Rendered>();
         thread::spawn(move || {
+            let decode = DecodeOptions {
+                hw: if gpu { HwPolicy::Auto } else { HwPolicy::Off },
+            };
             let settings = RenderSettings {
                 // Show missing files as magenta rather than stopping the preview.
                 missing_media: MissingMedia::Offline,
                 ..Default::default()
             };
-            let renderer = Renderer::new(&project, seq, FileSource::new(), settings)
-                .map(|r| r.with_plugins(plugins));
+            let renderer = Renderer::new(
+                &project,
+                seq,
+                FileSource::new().with_decode(decode),
+                settings,
+            )
+            .map(|r| r.with_plugins(plugins));
             let mut renderer = match renderer {
                 Ok(r) => r,
                 Err(e) => {
