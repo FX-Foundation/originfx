@@ -14,4 +14,5 @@ path = "src/main.rs"
 
 [dependencies]
 originfx-media-engine = { path = "../media-engine" }
+originfx-timeline-engine = { path = "../timeline-engine", features = ["media"] }
 clap = { version = "4", features = ["derive"] }
