@@ -65,7 +65,10 @@ fn refuses_damaged_and_future_files() {
     assert!(matches!(Project::from_json("{nope"), Err(Error::File(_))));
     let p = sample();
     let text = p.to_json().unwrap();
-    let future = text.replace("\"version\": 1", "\"version\": 99");
+    let future = text.replace(
+        &format!("\"version\": {}", file::FORMAT_VERSION),
+        "\"version\": 99",
+    );
     assert!(matches!(
         Project::from_json(&future),
         Err(Error::UnsupportedVersion { found: 99, .. })

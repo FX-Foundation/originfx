@@ -54,6 +54,7 @@ pub mod media;
 pub mod model;
 pub mod ops;
 pub mod query;
+pub mod retime;
 pub mod time;
 
 pub use editor::Editor;
@@ -61,5 +62,9 @@ pub use error::{Error, Result};
 pub use ids::*;
 pub use model::*;
 pub use ops::{ClipSpec, Edge, LinkMode, PlaceMode, Placed, Ripple, TrackUpdate};
-pub use query::{AudioSource, VideoLayer};
+pub use query::{ActiveTransition, AudioSource, Side, VideoLayer};
+pub use retime::{
+    Alignment, Direction, Speed, SpeedMode, Transition, TransitionKind, MAX_SPEED,
+    MAX_TRANSITION_SECS, MIN_SPEED,
+};
 pub use time::*;

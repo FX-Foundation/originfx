@@ -21,6 +21,7 @@ pub mod export;
 pub mod renderer;
 pub mod scale;
 pub mod source;
+pub mod transition;
 
 pub use composite::{blend_over, placement, solid, Fit, Placement};
 pub use error::{Error, Result};

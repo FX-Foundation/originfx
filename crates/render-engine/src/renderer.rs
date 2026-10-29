@@ -5,12 +5,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use media_engine::{AudioBuffer, VideoFrame};
-use timeline_engine::{AssetId, Project, Sequence, SequenceId, Time, TimeRange};
+use timeline_engine::{
+    Asset, AssetId, Clip, Project, Sequence, SequenceId, Time, TimeRange, MAX_TRANSITION_SECS,
+};
 
 use crate::composite::{blend_over, placement, solid, Fit};
 use crate::error::{Error, Result};
 use crate::scale::resize;
 use crate::source::MediaSource;
+use crate::transition::{blend, fade_in_gain, fade_out_gain};
 
 /// What to do when a clip's media file is not on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -108,64 +111,24 @@ impl<S: MediaSource> Renderer<S> {
         let mut canvas = solid(cw, ch, self.settings.background);
 
         for layer in seq.video_layers_at(t) {
-            let asset = self
-                .project
-                .asset(layer.clip.asset)
-                .ok_or(timeline_engine::Error::NoSuchAsset(layer.clip.asset))?
-                .clone();
-            let secs = layer.source_time.as_secs_f64();
-            let frame = match self.source.video_frame(&asset, layer.clip.stream, secs) {
-                Ok(f) => f,
-                Err(Error::MissingMedia { .. })
-                    if self.settings.missing_media == MissingMedia::Offline =>
-                {
-                    blend_over(
-                        &mut canvas,
-                        (cw, ch),
-                        &solid(cw, ch, OFFLINE_COLOUR),
-                        (cw, ch),
-                        (0, 0),
-                    );
-                    continue;
+            match layer.transition {
+                None => {
+                    self.draw_clip(&mut canvas, (cw, ch), &layer.clip, layer.source_time)?;
                 }
-                Err(e) => return Err(e),
-            };
-            let (sw, sh) = (frame.width as usize, frame.height as usize);
-            let place = placement(sw, sh, cw, ch, self.settings.fit);
-            if asset.is_still() {
-                let key = (asset.id, layer.clip.stream, place.width, place.height);
-                let pixels = match self.stills.get(&key) {
-                    Some(p) => Arc::clone(p),
-                    None => {
-                        let p = Arc::new(resize(&frame.data, sw, sh, place.width, place.height));
-                        self.stills.insert(key, Arc::clone(&p));
-                        p
+                Some(tr) => {
+                    // Each side is drawn on its own transparent canvas, blended, and the result
+                    // goes over what is underneath like any other layer.
+                    let mut sides = Vec::with_capacity(2);
+                    for side in [&tr.outgoing, &tr.incoming] {
+                        let mut buf = solid(cw, ch, [0, 0, 0, 0]);
+                        if let Some(side) = side {
+                            self.draw_clip(&mut buf, (cw, ch), &side.clip, side.source_time)?;
+                        }
+                        sides.push(buf);
                     }
-                };
-                blend_over(
-                    &mut canvas,
-                    (cw, ch),
-                    &pixels,
-                    (place.width, place.height),
-                    (place.x, place.y),
-                );
-            } else if (place.width, place.height) == (sw, sh) {
-                blend_over(
-                    &mut canvas,
-                    (cw, ch),
-                    &frame.data,
-                    (sw, sh),
-                    (place.x, place.y),
-                );
-            } else {
-                let scaled = resize(&frame.data, sw, sh, place.width, place.height);
-                blend_over(
-                    &mut canvas,
-                    (cw, ch),
-                    &scaled,
-                    (place.width, place.height),
-                    (place.x, place.y),
-                );
+                    let mixed = blend(tr.kind, tr.progress, &sides[0], &sides[1], cw, ch);
+                    blend_over(&mut canvas, (cw, ch), &mixed, (cw, ch), (0, 0));
+                }
             }
         }
         Ok(VideoFrame {
@@ -174,6 +137,70 @@ impl<S: MediaSource> Renderer<S> {
             pts_secs: t.as_secs_f64(),
             data: canvas,
         })
+    }
+
+    /// Draw one clip's picture at `source_time` onto `canvas`, fitted to the frame.
+    fn draw_clip(
+        &mut self,
+        canvas: &mut [u8],
+        (cw, ch): (usize, usize),
+        clip: &Clip,
+        source_time: Time,
+    ) -> Result<()> {
+        let asset = self
+            .project
+            .asset(clip.asset)
+            .ok_or(timeline_engine::Error::NoSuchAsset(clip.asset))?
+            .clone();
+        let secs = source_time.as_secs_f64();
+        let frame = match self.source.video_frame(&asset, clip.stream, secs) {
+            Ok(f) => f,
+            Err(Error::MissingMedia { .. })
+                if self.settings.missing_media == MissingMedia::Offline =>
+            {
+                blend_over(
+                    canvas,
+                    (cw, ch),
+                    &solid(cw, ch, OFFLINE_COLOUR),
+                    (cw, ch),
+                    (0, 0),
+                );
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        let (sw, sh) = (frame.width as usize, frame.height as usize);
+        let place = placement(sw, sh, cw, ch, self.settings.fit);
+        if asset.is_still() {
+            let key = (asset.id, clip.stream, place.width, place.height);
+            let pixels = match self.stills.get(&key) {
+                Some(p) => Arc::clone(p),
+                None => {
+                    let p = Arc::new(resize(&frame.data, sw, sh, place.width, place.height));
+                    self.stills.insert(key, Arc::clone(&p));
+                    p
+                }
+            };
+            blend_over(
+                canvas,
+                (cw, ch),
+                &pixels,
+                (place.width, place.height),
+                (place.x, place.y),
+            );
+        } else if (place.width, place.height) == (sw, sh) {
+            blend_over(canvas, (cw, ch), &frame.data, (sw, sh), (place.x, place.y));
+        } else {
+            let scaled = resize(&frame.data, sw, sh, place.width, place.height);
+            blend_over(
+                canvas,
+                (cw, ch),
+                &scaled,
+                (place.width, place.height),
+                (place.x, place.y),
+            );
+        }
+        Ok(())
     }
 
     /// The mixed sound of `range`, as stereo `f32` at the sequence's sample rate.
@@ -206,14 +233,17 @@ impl<S: MediaSource> Renderer<S> {
             end: Time::from_samples(last, rate),
         };
         let any_solo = seq.audio_tracks().iter().any(|t| t.solo);
+        let frame = seq.frame_duration();
         for track in seq.audio_tracks().iter() {
             if !track.enabled || (any_solo && !track.solo) {
                 continue;
             }
-            // One sample of slack each side, since clip edges are rounded to samples.
+            // Clips can be heard a little before and after their own span while a transition
+            // is under way, and clip edges are rounded to samples, so look wider.
+            let pad = Time::from_secs_f64(MAX_TRANSITION_SECS) + Time::from_samples(1, rate);
             let probe = TimeRange {
-                start: window.start - Time::from_samples(1, rate),
-                end: window.end + Time::from_samples(1, rate),
+                start: window.start - pad,
+                end: window.end + pad,
             };
             for clip in track.clips_in(probe) {
                 if !clip.enabled {
@@ -221,8 +251,24 @@ impl<S: MediaSource> Renderer<S> {
                 }
                 let cs = clip.start.to_samples_round(rate);
                 let ce = clip.end().to_samples_round(rate);
-                let from = first.max(cs);
-                let to = last.min(ce);
+                // The spans of the transition into this clip and the one out of it.
+                let tin = clip.transition_in.map(|t| {
+                    let (a, b) = t.window(clip.start, frame);
+                    (a.to_samples_round(rate), b.to_samples_round(rate))
+                });
+                let tout = track
+                    .clip_from(clip.end())
+                    .filter(|n| n.start == clip.end())
+                    .and_then(|n| {
+                        n.transition_in.map(|t| {
+                            let (a, b) = t.window(n.start, frame);
+                            (a.to_samples_round(rate), b.to_samples_round(rate))
+                        })
+                    });
+                let heard_from = tin.map_or(cs, |(a, _)| a);
+                let heard_to = tout.map_or(ce, |(_, b)| b);
+                let from = first.max(heard_from);
+                let to = last.min(heard_to);
                 if from >= to {
                     continue;
                 }
@@ -231,9 +277,7 @@ impl<S: MediaSource> Renderer<S> {
                     .asset(clip.asset)
                     .ok_or(timeline_engine::Error::NoSuchAsset(clip.asset))?
                     .clone();
-                let secs = clip.source_in.as_secs_f64() + (from - cs) as f64 / f64::from(rate);
-                let n = (to - from) as usize;
-                let part = match self.source.audio(&asset, clip.stream, secs, n, rate) {
+                let mut part = match self.clip_audio(clip, &asset, (cs, ce - cs), from, to, rate) {
                     Ok(p) => p,
                     Err(Error::MissingMedia { .. })
                         if self.settings.missing_media == MissingMedia::Offline =>
@@ -242,6 +286,24 @@ impl<S: MediaSource> Renderer<S> {
                     }
                     Err(e) => return Err(e),
                 };
+                if tin.is_some() || tout.is_some() {
+                    for (j, pair) in part.chunks_exact_mut(2).enumerate() {
+                        let s = from + j as i64;
+                        let mut g = 1.0f32;
+                        if let Some((a, b)) = tin {
+                            if s < b {
+                                g *= fade_in_gain(progress(s, a, b));
+                            }
+                        }
+                        if let Some((a, b)) = tout {
+                            if s >= a {
+                                g *= fade_out_gain(progress(s, a, b));
+                            }
+                        }
+                        pair[0] *= g;
+                        pair[1] *= g;
+                    }
+                }
                 let at = ((from - first) * 2) as usize;
                 for (m, s) in mix[at..at + part.len()].iter_mut().zip(&part) {
                     *m += *s;
@@ -253,4 +315,76 @@ impl<S: MediaSource> Renderer<S> {
         }
         Ok(mix)
     }
+
+    /// The clip's sound for sequence samples `from..to`, following its speed and direction.
+    /// `(cs, n)` is the clip's first sample number on the timeline and its length in samples.
+    /// Samples outside the clip (during a transition) continue the clip's media.
+    fn clip_audio(
+        &mut self,
+        clip: &Clip,
+        asset: &Asset,
+        (cs, n): (i64, i64),
+        from: i64,
+        to: i64,
+        rate: u32,
+    ) -> Result<Vec<f32>> {
+        let count = (to - from) as usize;
+        let sr = f64::from(rate);
+        if clip.speed.is_normal() && !clip.reverse {
+            let secs = clip.source_in.as_secs_f64() + (from - cs) as f64 / sr;
+            return self.source.audio(asset, clip.stream, secs, count, rate);
+        }
+        // Where each output sample reads from, in media samples (fractional).
+        let speed = clip.speed.as_f64();
+        let origin = clip.source_in.as_secs_f64() * sr;
+        let position = |k: i64| -> f64 {
+            if clip.reverse {
+                origin + (n - 1 - k) as f64 * speed
+            } else {
+                origin + k as f64 * speed
+            }
+        };
+        let (k0, k1) = (from - cs, to - 1 - cs);
+        let (p0, p1) = (position(k0), position(k1));
+        let (lo, hi) = (p0.min(p1), p0.max(p1));
+        let base = lo.floor() as i64 - 1;
+        let len = (hi.floor() as i64 + 2 - base + 1) as usize;
+        let block = self
+            .source
+            .audio(asset, clip.stream, base as f64 / sr, len, rate)?;
+        let at = |i: i64, c: usize| -> f32 {
+            let idx = (i - base).clamp(0, len as i64 - 1) as usize;
+            block[idx * 2 + c]
+        };
+        let mut out = vec![0f32; count * 2];
+        for (j, pair) in out.chunks_exact_mut(2).enumerate() {
+            let m = position(k0 + j as i64);
+            let i = m.floor() as i64;
+            let f = (m - i as f64) as f32;
+            for (c, o) in pair.iter_mut().enumerate() {
+                *o = if f == 0.0 {
+                    at(i, c)
+                } else {
+                    catmull_rom(at(i - 1, c), at(i, c), at(i + 1, c), at(i + 2, c), f)
+                };
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// How far `s` is through the span `a..b`, measured to the middle of the sample.
+fn progress(s: i64, a: i64, b: i64) -> f64 {
+    if b <= a {
+        return 1.0;
+    }
+    ((s - a) as f64 + 0.5) / (b - a) as f64
+}
+
+/// Smooth interpolation between `p1` and `p2` at fraction `t`, using the points either side.
+fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
+    0.5 * ((2.0 * p1)
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t)
 }

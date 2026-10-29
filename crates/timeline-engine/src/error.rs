@@ -41,6 +41,8 @@ pub enum Error {
     NotAdjacent { left: ClipId, right: ClipId },
     #[error("the edit is blocked on {track} by {clip}")]
     Blocked { track: TrackId, clip: ClipId },
+    #[error("the transition into {clip} cannot be made: {reason}")]
+    BadTransition { clip: ClipId, reason: String },
     #[error("{0} is still used by a clip")]
     AssetInUse(AssetId),
     #[error("a still image needs a duration")]
