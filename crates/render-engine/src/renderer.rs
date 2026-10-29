@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use media_engine::{AudioBuffer, VideoFrame};
 use timeline_engine::{
-    Asset, AssetId, Clip, Param, Project, Sequence, SequenceId, Time, TimeRange,
+    Asset, AssetId, Clip, LiveEffect, Param, Project, Sequence, SequenceId, Time, TimeRange,
     MAX_TRANSITION_SECS,
 };
 
@@ -65,9 +65,17 @@ pub struct Renderer<S: MediaSource> {
     /// Drawn graphics at the frame's size: drawn once, used for every frame.
     graphics: HashMap<(AssetId, usize, usize), Arc<Vec<u8>>>,
     fonts: motion_graphics_engine::Fonts,
+    plugins: Option<Arc<plugin_engine::Host>>,
 }
 
 impl<S: MediaSource> Renderer<S> {
+    /// Use these installed plugins for plugin effects. Without them a plugin effect stops the
+    /// render with a clear error (or is skipped when missing media is allowed offline).
+    pub fn with_plugins(mut self, host: Arc<plugin_engine::Host>) -> Self {
+        self.plugins = Some(host);
+        self
+    }
+
     pub fn new(
         project: &Project,
         seq: SequenceId,
@@ -85,6 +93,7 @@ impl<S: MediaSource> Renderer<S> {
             stills: HashMap::new(),
             graphics: HashMap::new(),
             fonts: motion_graphics_engine::Fonts::new(),
+            plugins: None,
         })
     }
 
@@ -170,8 +179,36 @@ impl<S: MediaSource> Renderer<S> {
         }
         let mut own = solid(cw, ch, [0, 0, 0, 0]);
         self.draw_clip_plain(&mut own, (cw, ch), clip, source_time)?;
-        for (kind, values) in live {
-            effects_engine::apply(kind, &values, &mut own, cw, ch);
+        for effect in live {
+            match effect {
+                LiveEffect::Builtin(kind, values) => {
+                    effects_engine::apply(kind, &values, &mut own, cw, ch);
+                }
+                LiveEffect::Plugin(spec, values) => {
+                    let plugin = self
+                        .plugins
+                        .as_ref()
+                        .ok_or_else(|| plugin_engine::Error::NotFound(spec.id.clone()))
+                        .and_then(|h| h.get(&spec.id));
+                    let result = plugin.and_then(|p| {
+                        if p.manifest().params.len() != values.len() {
+                            return Err(plugin_engine::Error::Manifest(format!(
+                                "{} now has {} settings but the project has {}; re-add the effect",
+                                spec.id,
+                                p.manifest().params.len(),
+                                values.len()
+                            )));
+                        }
+                        p.apply(&values, &mut own, cw, ch)
+                    });
+                    match result {
+                        Ok(()) => {}
+                        Err(plugin_engine::Error::NotFound(_))
+                            if self.settings.missing_media == MissingMedia::Offline => {}
+                        Err(e) => return Err(Error::Plugin(e.to_string())),
+                    }
+                }
+            }
         }
         // Then the look: crop, mask, move/scale/turn, and finally lay it over what is beneath.
         let [l, r, tp, b] = look.crop;

@@ -66,7 +66,9 @@ pub use animation::{Animation, Curve, Interp, Key, Param, Target};
 pub use audio::{ClipAudio, Fade, FadeCurve, Gain, Pan};
 pub use compositing::{Affine, BlendMode, Look, Mask, MaskShape, MaskSpec, Transform};
 pub use editor::Editor;
-pub use effects::{Effect, EffectId, EffectKind, ParamSpec, MAX_EFFECTS};
+pub use effects::{
+    Effect, EffectId, EffectKind, ParamSpec, PluginSpec, Setting, MAX_EFFECTS, MAX_PLUGIN_SETTINGS,
+};
 pub use error::{Error, Result};
 pub use graphics::validate as validate_graphic;
 pub use graphics::{Align, Colour, Fill, Generator, Shadow, Shape, ShapeKind, Stroke, Text};

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::animation::{Animation, Curve, Interp, Key, Param};
 use crate::audio::{Fade, FadeCurve, Gain, Pan};
-use crate::effects::{Effect, EffectId, EffectKind};
+use crate::effects::{Effect, EffectId, EffectKind, PluginSpec, Setting};
 use crate::error::{Error, Result};
 use crate::ids::*;
 use crate::model::*;
@@ -21,7 +21,7 @@ use crate::retime::{Alignment, Speed, Transition, TransitionKind};
 use crate::time::{FrameRate, Time};
 
 /// The file format version this build writes and reads.
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
@@ -191,7 +191,29 @@ fn look_in(t: Option<TransformDto>, b: Option<String>, m: Option<MaskDto>) -> Re
 }
 
 #[derive(Serialize, Deserialize)]
+struct PluginDto {
+    id: String,
+    name: String,
+    #[serde(default)]
+    version: String,
+    settings: Vec<SettingDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SettingDto {
+    name: String,
+    #[serde(default)]
+    unit: String,
+    default: f64,
+    min: f64,
+    max: f64,
+}
+
+#[derive(Serialize, Deserialize)]
 struct EffectDto {
+    /// Added in format version 8: set when the effect comes from a plugin (`kind` is then "plugin").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plugin: Option<PluginDto>,
     id: u32,
     kind: String,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -213,22 +235,42 @@ fn is_true(v: &bool) -> bool {
 fn effects_out(list: &[Effect]) -> Vec<EffectDto> {
     list.iter()
         .map(|e| {
-            let specs = e.kind.params();
+            let specs = e.settings();
             EffectDto {
+                plugin: e.plugin.as_ref().map(|p| PluginDto {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    version: p.version.clone(),
+                    settings: p
+                        .settings
+                        .iter()
+                        .map(|s| SettingDto {
+                            name: s.name.clone(),
+                            unit: s.unit.clone(),
+                            default: s.default,
+                            min: s.min,
+                            max: s.max,
+                        })
+                        .collect(),
+                }),
                 id: e.id.0,
-                kind: e.kind.name().to_string(),
+                kind: if e.plugin.is_some() {
+                    "plugin".to_string()
+                } else {
+                    e.kind.name().to_string()
+                },
                 enabled: e.enabled,
                 params: specs
                     .iter()
                     .enumerate()
-                    .map(|(i, s)| (s.name.to_string(), e.value(i)))
+                    .map(|(i, s)| (s.name.clone(), e.value(i)))
                     .collect(),
                 anim: specs
                     .iter()
                     .enumerate()
                     .filter_map(|(i, s)| {
                         e.curve(i).map(|c| CurveDto {
-                            param: s.name.to_string(),
+                            param: s.name.clone(),
                             keys: keys_out(c),
                         })
                     })
@@ -241,29 +283,66 @@ fn effects_out(list: &[Effect]) -> Vec<EffectDto> {
 fn effects_in(list: Vec<EffectDto>) -> Result<Vec<Effect>> {
     let mut out = Vec::new();
     for d in list {
-        let kind = EffectKind::parse(&d.kind)
-            .ok_or_else(|| Error::File(format!("unknown effect {:?}", d.kind)))?;
-        let specs = kind.params();
-        let mut values = kind.defaults();
+        let (kind, plugin) = match d.plugin {
+            Some(p) => {
+                let spec = PluginSpec {
+                    id: p.id,
+                    name: p.name,
+                    version: p.version,
+                    settings: p
+                        .settings
+                        .into_iter()
+                        .map(|s| Setting {
+                            name: s.name,
+                            unit: s.unit,
+                            default: s.default,
+                            min: s.min,
+                            max: s.max,
+                        })
+                        .collect(),
+                };
+                if let Some(m) = spec.problem() {
+                    return Err(Error::File(format!("plugin {}: {m}", spec.id)));
+                }
+                (EffectKind::Invert, Some(spec))
+            }
+            None => (
+                EffectKind::parse(&d.kind)
+                    .ok_or_else(|| Error::File(format!("unknown effect {:?}", d.kind)))?,
+                None,
+            ),
+        };
+        // The same record as the effect would make, to get the settings in order.
+        let probe = match &plugin {
+            Some(s) => Effect::new_plugin(EffectId(d.id), s.clone()),
+            None => Effect::new(EffectId(d.id), kind),
+        };
+        let label = probe.label();
+        let specs = probe.settings();
+        let mut values: Vec<f64> = specs.iter().map(|s| s.default).collect();
         for (name, v) in &d.params {
-            let i = kind
-                .param_index(name)
-                .ok_or_else(|| Error::File(format!("{kind} has no setting {name:?}")))?;
+            let i = probe
+                .setting_index(name)
+                .ok_or_else(|| Error::File(format!("{label} has no setting {name:?}")))?;
             values[i] = *v;
         }
         let mut curves = vec![None; specs.len()];
         for c in d.anim {
-            let i = kind
-                .param_index(&c.param)
-                .ok_or_else(|| Error::File(format!("{kind} has no setting {:?}", c.param)))?;
+            let i = probe
+                .setting_index(&c.param)
+                .ok_or_else(|| Error::File(format!("{label} has no setting {:?}", c.param)))?;
             if curves[i].is_some() {
-                return Err(Error::File(format!("{kind} {} is animated twice", c.param)));
+                return Err(Error::File(format!(
+                    "{label} {} is animated twice",
+                    c.param
+                )));
             }
             curves[i] = Some(curve_in(c.keys, &c.param)?);
         }
         out.push(Effect::from_parts(
             EffectId(d.id),
             kind,
+            plugin,
             d.enabled,
             values,
             curves,

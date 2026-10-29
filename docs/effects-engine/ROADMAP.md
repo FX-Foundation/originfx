@@ -31,5 +31,5 @@
 |---|---|
 | Keying composites | Compositing (opacity, blend modes, transforms and masks are done: [Compositing Engine](../compositing-engine/README.md)) |
 | Text, shapes, animated graphics | Done in the [Motion Graphics Engine](../motion-graphics-engine/README.md) |
-| Effects from plug-ins (OFX, custom shaders) | Plugin |
+| Effects from plug-ins | Done in the [Plugin Engine](../plugin-engine/README.md) (WebAssembly; OFX and shaders are on its roadmap) |
 | Effect settings panel, keyframe lanes | the interface, once it exists |

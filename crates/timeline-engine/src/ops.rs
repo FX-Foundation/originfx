@@ -1597,25 +1597,52 @@ fn find_effect(c: &mut Clip, effect: EffectId) -> Result<&mut Effect> {
 }
 
 fn setting_index(e: &Effect, name: &str) -> Result<usize> {
-    e.kind.param_index(name).ok_or_else(|| {
-        let names: Vec<&str> = e.kind.params().iter().map(|s| s.name).collect();
+    e.setting_index(name).ok_or_else(|| {
+        let names: Vec<String> = e.settings().into_iter().map(|s| s.name).collect();
         Error::BadEffect(format!(
             "{} has no setting '{name}'; it has: {}",
-            e.kind,
+            e.label(),
             names.join(", ")
         ))
     })
 }
 
 fn check_setting(e: &Effect, i: usize, value: f64) -> Result<()> {
-    let s = e.kind.params()[i];
+    let s = &e.settings()[i];
     if !value.is_finite() || value < s.min || value > s.max {
         return Err(Error::BadEffect(format!(
             "{} {} must be between {} and {} ({})",
-            e.kind, s.name, s.min, s.max, s.unit
+            e.label(),
+            s.name,
+            s.min,
+            s.max,
+            s.unit
         )));
     }
     Ok(())
+}
+
+/// Add an effect that comes from a plugin. Returns its id.
+pub(crate) fn add_plugin_effect(
+    seq: &mut Sequence,
+    clip: ClipId,
+    spec: crate::effects::PluginSpec,
+    index: Option<usize>,
+) -> Result<EffectId> {
+    if let Some(m) = spec.problem() {
+        return Err(Error::BadEffect(format!("plugin {}: {m}", spec.id)));
+    }
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    if c.effects.len() >= MAX_EFFECTS {
+        return Err(Error::BadEffect(format!(
+            "a clip can have at most {MAX_EFFECTS} effects"
+        )));
+    }
+    let id = EffectId(c.effects.iter().map(|e| e.id.0).max().unwrap_or(0) + 1);
+    let at = index.unwrap_or(c.effects.len()).min(c.effects.len());
+    c.effects.insert(at, Effect::new_plugin(id, spec));
+    put(seq, tid, c)?;
+    Ok(id)
 }
 
 /// Add an effect to a picture clip, at `index` in the stack (the end if `None`). Returns its id.

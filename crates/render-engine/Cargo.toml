@@ -19,7 +19,9 @@ originfx-audio-engine = { path = "../audio-engine" }
 originfx-effects-engine = { path = "../effects-engine" }
 originfx-compositing-engine = { path = "../compositing-engine" }
 originfx-motion-graphics-engine = { path = "../motion-graphics-engine" }
+originfx-plugin-engine = { path = "../plugin-engine" }
 
 [dev-dependencies]
 tempfile = "3"
 originfx-timeline-engine = { path = "../timeline-engine", features = ["media"] }
+originfx-plugin-engine = { path = "../plugin-engine", features = ["example"] }

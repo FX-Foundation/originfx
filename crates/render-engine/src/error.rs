@@ -26,6 +26,10 @@ pub enum Error {
         path: PathBuf,
     },
 
+    /// A plugin effect could not run (not installed, crashed, out of budget...).
+    #[error("plugin: {0}")]
+    Plugin(String),
+
     /// A drawn graphic could not be drawn (usually its font).
     #[error("graphic: {0}")]
     Graphic(String),

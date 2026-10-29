@@ -669,6 +669,19 @@ impl Editor {
         })
     }
 
+    /// Add an effect from a plugin (given by its description) to a picture clip's stack.
+    pub fn add_plugin_effect(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        spec: crate::effects::PluginSpec,
+        index: Option<usize>,
+    ) -> Result<EffectId> {
+        self.edit_seq("Add effect", seq, |s, _| {
+            ops::add_plugin_effect(s, clip, spec, index)
+        })
+    }
+
     /// Set the fixed value of a picture setting: opacity, x, y, scale-x, scale-y, rotation,
     /// crop-*, or a mask value. Refused while the value is animated.
     pub fn set_look_value(

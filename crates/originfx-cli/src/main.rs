@@ -2,6 +2,7 @@
 //! `originfx`: command line front-end for the OriginFX engines.
 
 mod audio;
+mod plugin;
 mod png;
 mod render;
 mod timeline;
@@ -36,6 +37,8 @@ enum Command {
     Render(render::RenderArgs),
     /// Save one frame of a timeline project as a PNG.
     RenderFrame(render::FrameArgs),
+    /// Plugins: look at them, or write the example one.
+    Plugin(plugin::PluginArgs),
     /// Measure loudness (LUFS) and peak of a media file or of a project's mix.
     Loudness(audio::LoudnessArgs),
     /// Show what is inside a media file.
@@ -216,6 +219,9 @@ fn run(cmd: Command) -> CliResult {
         }
         Command::RenderFrame(args) => {
             render::run_frame(args)?;
+        }
+        Command::Plugin(args) => {
+            plugin::run(args)?;
         }
         Command::Loudness(args) => {
             audio::run(args)?;

@@ -16,5 +16,6 @@ path = "src/main.rs"
 originfx-audio-engine = { path = "../audio-engine" }
 originfx-media-engine = { path = "../media-engine" }
 originfx-render-engine = { path = "../render-engine" }
+originfx-plugin-engine = { path = "../plugin-engine", features = ["example"] }
 originfx-timeline-engine = { path = "../timeline-engine", features = ["media"] }
 clap = { version = "4", features = ["derive"] }
