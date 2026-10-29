@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use timeline_engine::media::probe_asset;
 use timeline_engine::{
-    AssetId, ClipId, Edge, Editor, FrameRate, LinkMode, MarkerColour, PlaceMode, Project, Ripple,
-    SequenceId, SequenceSettings, Time, TrackKind,
+    Alignment, AssetId, ClipId, Edge, Editor, FrameRate, LinkMode, MarkerColour, PlaceMode,
+    Project, Ripple, SequenceId, SequenceSettings, Speed, SpeedMode, Time, TrackKind, Transition,
+    TransitionKind,
 };
 
 use crate::CliResult;
@@ -98,6 +99,40 @@ enum Cmd {
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         tracks: i32,
     },
+    /// Change how fast a clip plays (and the clips linked to it): `2`, `0.5`, `250%`, `3/2`.
+    Speed {
+        clip: String,
+        speed: String,
+        /// Keep the clip as long as it is and show more or less of the media, instead of
+        /// keeping the same media and changing the length.
+        #[arg(long)]
+        keep_length: bool,
+        /// Move the clips after it to follow, instead of refusing if it would grow into them.
+        #[arg(long)]
+        ripple: bool,
+    },
+    /// Play a clip backwards (and the clips linked to it); `--off` plays it forwards again.
+    Reverse {
+        clip: String,
+        #[arg(long)]
+        off: bool,
+    },
+    /// Put a transition into a clip from the clip before it, or `--remove` it.
+    Transition {
+        /// The clip the transition leads into; it must touch the clip before it.
+        clip: String,
+        /// dissolve, dip-black, dip-white, wipe-left/right/up/down or push-left/right/up/down.
+        #[arg(default_value = "dissolve")]
+        kind: String,
+        /// Length in seconds.
+        #[arg(long, default_value_t = 1.0)]
+        length: f64,
+        /// center, start (begins at the cut) or end (finishes at the cut).
+        #[arg(long, default_value = "center")]
+        align: String,
+        #[arg(long)]
+        remove: bool,
+    },
     /// Add a marker.
     Marker {
         at: f64,
@@ -149,6 +184,28 @@ fn kind_word(k: TrackKind) -> &'static str {
     }
 }
 
+/// How many transitions the project has. An edit can silently drop one (see the Timeline
+/// Engine docs), and the command line says so.
+fn transitions(p: &Project) -> usize {
+    p.sequences()
+        .values()
+        .flat_map(|s| s.clips())
+        .filter(|(_, c)| c.transition_in.is_some())
+        .count()
+}
+
+fn save(ed: &Editor, path: &Path, before: usize) -> Result<(), Box<dyn std::error::Error>> {
+    ed.project().save(path)?;
+    let after = transitions(ed.project());
+    if after < before {
+        eprintln!(
+            "note: {} transition(s) no longer fit after this edit and were removed",
+            before - after
+        );
+    }
+    Ok(())
+}
+
 fn load(path: &Path) -> Result<Editor, Box<dyn std::error::Error>> {
     Ok(Editor::from_project(Project::load(path)?))
 }
@@ -184,8 +241,9 @@ pub fn run(args: TimelineArgs) -> CliResult {
         }
         Cmd::Import { file } => {
             let mut ed = load(&path)?;
+            let before = transitions(ed.project());
             let id = ed.add_asset(probe_asset(&file)?)?;
-            ed.project().save(&path)?;
+            save(&ed, &path, before)?;
             println!("{id}");
         }
         Cmd::Add {
@@ -200,6 +258,7 @@ pub fn run(args: TimelineArgs) -> CliResult {
             no_audio,
         } => {
             let mut ed = load(&path)?;
+            let before = transitions(ed.project());
             let seq = first_sequence(ed.project())?;
             let asset = AssetId(id_number(&asset)?);
             let a = ed.project().asset(asset).ok_or("no such asset")?.clone();
@@ -224,21 +283,23 @@ pub fn run(args: TimelineArgs) -> CliResult {
                 au,
                 mode,
             )?;
-            ed.project().save(&path)?;
+            save(&ed, &path, before)?;
             for c in [placed.video, placed.audio].into_iter().flatten() {
                 println!("{c}");
             }
         }
         Cmd::Split { clip, at } => {
             let mut ed = load(&path)?;
+            let before = transitions(ed.project());
             let seq = first_sequence(ed.project())?;
             let (l, r) =
                 ed.split_clip(seq, ClipId(id_number(&clip)?), secs(at), LinkMode::Follow)?;
-            ed.project().save(&path)?;
+            save(&ed, &path, before)?;
             println!("{l} {r}");
         }
         Cmd::Delete { clips, ripple } => {
             let mut ed = load(&path)?;
+            let before = transitions(ed.project());
             let seq = first_sequence(ed.project())?;
             let ids = clips
                 .iter()
@@ -246,7 +307,7 @@ pub fn run(args: TimelineArgs) -> CliResult {
                 .collect::<Result<Vec<_>, _>>()?;
             let r = if ripple { Ripple::Sync } else { Ripple::Off };
             ed.delete_clips(seq, &ids, r, LinkMode::Follow)?;
-            ed.project().save(&path)?;
+            save(&ed, &path, before)?;
             println!("deleted");
         }
         Cmd::Trim {
@@ -257,6 +318,7 @@ pub fn run(args: TimelineArgs) -> CliResult {
             ripple,
         } => {
             let mut ed = load(&path)?;
+            let before = transitions(ed.project());
             let seq = first_sequence(ed.project())?;
             let edge = if head { Edge::Head } else { Edge::Tail };
             let r = if ripple { Ripple::Sync } else { Ripple::Off };
@@ -268,7 +330,7 @@ pub fn run(args: TimelineArgs) -> CliResult {
                 r,
                 LinkMode::Follow,
             )?;
-            ed.project().save(&path)?;
+            save(&ed, &path, before)?;
             println!("trimmed");
         }
         Cmd::Move {
@@ -277,6 +339,7 @@ pub fn run(args: TimelineArgs) -> CliResult {
             tracks,
         } => {
             let mut ed = load(&path)?;
+            let before = transitions(ed.project());
             let seq = first_sequence(ed.project())?;
             ed.move_clips(
                 seq,
@@ -285,15 +348,81 @@ pub fn run(args: TimelineArgs) -> CliResult {
                 tracks,
                 LinkMode::Follow,
             )?;
-            ed.project().save(&path)?;
+            save(&ed, &path, before)?;
             println!("moved");
+        }
+        Cmd::Speed {
+            clip,
+            speed,
+            keep_length,
+            ripple,
+        } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let speed = Speed::parse(&speed)
+                .ok_or("speed must look like 2, 0.5, 250% or 3/2, between 1% and 10000%")?;
+            let mode = if keep_length {
+                SpeedMode::KeepLength
+            } else {
+                SpeedMode::KeepMedia
+            };
+            let r = if ripple { Ripple::Sync } else { Ripple::Off };
+            ed.set_speed(
+                seq,
+                ClipId(id_number(&clip)?),
+                speed,
+                mode,
+                r,
+                LinkMode::Follow,
+            )?;
+            save(&ed, &path, before)?;
+            println!("speed {speed}");
+        }
+        Cmd::Reverse { clip, off } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            ed.set_reverse(seq, ClipId(id_number(&clip)?), !off, LinkMode::Follow)?;
+            save(&ed, &path, before)?;
+            println!("{}", if off { "forwards" } else { "reversed" });
+        }
+        Cmd::Transition {
+            clip,
+            kind,
+            length,
+            align,
+            remove,
+        } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let tr = if remove {
+                None
+            } else {
+                Some(Transition {
+                    kind: TransitionKind::parse(&kind).ok_or_else(|| {
+                        format!(
+                            "unknown transition; try one of: {}",
+                            TransitionKind::all_names().join(", ")
+                        )
+                    })?,
+                    duration: secs(length),
+                    alignment: Alignment::parse(&align)
+                        .ok_or("align must be center, start or end")?,
+                })
+            };
+            ed.set_transition(seq, ClipId(id_number(&clip)?), tr, LinkMode::Follow)?;
+            save(&ed, &path, before)?;
+            println!("{}", if remove { "removed" } else { "added" });
         }
         Cmd::Marker { at, name, colour } => {
             let mut ed = load(&path)?;
+            let before = transitions(ed.project());
             let seq = first_sequence(ed.project())?;
             let colour = MarkerColour::parse(&colour).ok_or("unknown colour")?;
             let id = ed.add_marker(seq, secs(at), Time::ZERO, name, colour)?;
-            ed.project().save(&path)?;
+            save(&ed, &path, before)?;
             println!("{id}");
         }
         Cmd::Show => {
@@ -322,13 +451,31 @@ pub fn run(args: TimelineArgs) -> CliResult {
                     );
                     println!("  {}{flags}", t.name);
                     for c in t.clips() {
+                        let mut notes = String::new();
+                        if !c.speed.is_normal() {
+                            notes += &format!(" {}", c.speed);
+                        }
+                        if c.reverse {
+                            notes += " reversed";
+                        }
+                        if let Some(t) = c.transition_in {
+                            notes += &format!(
+                                " [{} {} in, {}]",
+                                t.kind.name(),
+                                t.duration,
+                                t.alignment.as_str()
+                            );
+                        }
+                        if !c.enabled {
+                            notes += " (disabled)";
+                        }
                         println!(
                             "    {} {} {} -> {}{}",
                             c.id,
                             c.name,
                             c.start,
                             c.end(),
-                            if c.enabled { "" } else { " (disabled)" }
+                            notes
                         );
                     }
                 }

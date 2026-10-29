@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::ids::*;
 use crate::model::*;
+use crate::retime::{Alignment, Speed, Transition, TransitionKind};
 use crate::time::{FrameRate, Time};
 
 /// The file format version this build writes and reads.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct FileDto {
@@ -65,6 +66,26 @@ struct ClipDto {
     duration: i64,
     enabled: bool,
     link: Option<u64>,
+    /// Added in format version 2; files from version 1 mean normal speed.
+    #[serde(default = "one")]
+    speed_num: u32,
+    #[serde(default = "one")]
+    speed_den: u32,
+    #[serde(default)]
+    reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transition_in: Option<TransitionDto>,
+}
+
+fn one() -> u32 {
+    1
+}
+
+#[derive(Serialize, Deserialize)]
+struct TransitionDto {
+    kind: String,
+    duration: i64,
+    alignment: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -129,12 +150,20 @@ fn track_out(t: &Track) -> TrackDto {
                 duration: c.duration.ticks(),
                 enabled: c.enabled,
                 link: c.link.map(|l| l.0),
+                speed_num: c.speed.num(),
+                speed_den: c.speed.den(),
+                reverse: c.reverse,
+                transition_in: c.transition_in.map(|t| TransitionDto {
+                    kind: t.kind.name(),
+                    duration: t.duration.ticks(),
+                    alignment: t.alignment.as_str().to_string(),
+                }),
             })
             .collect(),
     }
 }
 
-fn track_in(kind: TrackKind, d: TrackDto) -> Track {
+fn track_in(kind: TrackKind, d: TrackDto) -> Result<Track> {
     let mut t = Track::new(TrackId(d.id), kind, d.name);
     t.enabled = d.enabled;
     t.locked = d.locked;
@@ -150,10 +179,24 @@ fn track_in(kind: TrackKind, d: TrackDto) -> Track {
             duration: Time::from_ticks(c.duration),
             enabled: c.enabled,
             link: c.link.map(LinkId),
+            speed: Speed::new(c.speed_num, c.speed_den)
+                .ok_or_else(|| Error::File(format!("bad speed {}/{}", c.speed_num, c.speed_den)))?,
+            reverse: c.reverse,
+            transition_in: match c.transition_in {
+                None => None,
+                Some(t) => Some(Transition {
+                    kind: TransitionKind::parse(&t.kind)
+                        .ok_or_else(|| Error::File(format!("unknown transition {:?}", t.kind)))?,
+                    duration: Time::from_ticks(t.duration),
+                    alignment: Alignment::parse(&t.alignment).ok_or_else(|| {
+                        Error::File(format!("unknown transition alignment {:?}", t.alignment))
+                    })?,
+                }),
+            },
         };
         t.items.insert(clip.start, clip);
     }
-    t
+    Ok(t)
 }
 
 fn to_dto(p: &Project) -> FileDto {
@@ -279,12 +322,12 @@ fn from_dto(d: FileDto) -> Result<Project> {
             .video
             .into_iter()
             .map(|t| track_in(TrackKind::Video, t))
-            .collect::<Vector<_>>();
+            .collect::<Result<Vector<_>>>()?;
         seq.audio = s
             .audio
             .into_iter()
             .map(|t| track_in(TrackKind::Audio, t))
-            .collect::<Vector<_>>();
+            .collect::<Result<Vector<_>>>()?;
         for m in s.markers {
             let colour = MarkerColour::parse(&m.colour)
                 .ok_or_else(|| Error::File(format!("unknown marker colour {:?}", m.colour)))?;

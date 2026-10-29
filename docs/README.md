@@ -41,4 +41,13 @@ Each engine has its own folder with the same set of pages.
 | [DECISIONS.md](render-engine/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
 | [TRY_IT.md](render-engine/TRY_IT.md) | Checklist for trying it on your own machine |
 
+### Video Editing Engine (done)
+
+| Document | What it is |
+|---|---|
+| [README.md](video-editing/README.md) | Full guide: speed, reverse, transitions, command line |
+| [ROADMAP.md](video-editing/ROADMAP.md) | What is next and what belongs to other engines |
+| [DECISIONS.md](video-editing/DECISIONS.md) | Defaults chosen while building it, and how to reverse each |
+| [TRY_IT.md](video-editing/TRY_IT.md) | Checklist for trying it on your own machine |
+
 The other engines get their own folders as they are built.

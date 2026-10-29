@@ -12,7 +12,8 @@ use im::OrdMap;
 
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, SequenceId, TrackId};
-use crate::model::{Asset, Clip, Project, Sequence, Track, TrackKind};
+use crate::model::{Asset, Clip, Project, Sequence, Track, TrackKind, SOURCE_SLACK};
+use crate::retime::{Speed, SpeedMode, Transition};
 use crate::time::{Time, TimeRange};
 
 /// How a new clip is put onto a track.
@@ -68,6 +69,10 @@ pub struct ClipSpec {
     pub duration: Option<Time>,
     /// The clip's name. `None` uses the asset's name.
     pub name: Option<String>,
+    /// Playback speed. `duration` is timeline time, so at 2x a 5 s clip uses 10 s of media.
+    pub speed: Speed,
+    /// Play the media backwards.
+    pub reverse: bool,
 }
 
 impl ClipSpec {
@@ -80,6 +85,8 @@ impl ClipSpec {
             source_in: Time::ZERO,
             duration: None,
             name: None,
+            speed: Speed::NORMAL,
+            reverse: false,
         }
     }
 }
@@ -248,16 +255,13 @@ fn clear_range(track: &mut Track, cx: &mut Ctx<'_>, range: TimeRange) {
         track.items.remove(&c.start);
         let mut kept_left = false;
         if c.start < range.start {
-            let mut left = c.clone();
-            left.duration = range.start - c.start;
+            let left = c.window(c.start, range.start);
             track.items.insert(left.start, left);
             kept_left = true;
         }
         if c.end() > range.end {
-            let mut right = c.clone();
-            right.start = range.end;
-            right.source_in = c.source_in + (range.end - c.start);
-            right.duration = c.end() - range.end;
+            let mut right = c.window(range.end, c.end());
+            right.transition_in = None;
             if kept_left {
                 right.id = cx.clip_id();
                 right.link = None;
@@ -290,13 +294,10 @@ fn split_tracks_at(
         else {
             continue;
         };
-        let mut left = clip.clone();
-        left.duration = t - clip.start;
-        let mut right = clip.clone();
+        let left = clip.window(clip.start, t);
+        let mut right = clip.window(t, clip.end());
         right.id = cx.clip_id();
-        right.start = t;
-        right.source_in = clip.source_in + (t - clip.start);
-        right.duration = clip.end() - t;
+        right.transition_in = None;
         right.link = clip
             .link
             .map(|l| *new_links.entry(l).or_insert_with(|| cx.link_id()));
@@ -430,9 +431,11 @@ pub(crate) fn update_track(seq: &mut Sequence, id: TrackId, update: TrackUpdate)
 // ---------------------------------------------------------------------------
 
 /// The whole asset from `source_in` onwards, rounded down to whole frames.
-fn default_duration(seq: &Sequence, asset: &Asset, source_in: Time) -> Result<Time> {
+fn default_duration(seq: &Sequence, asset: &Asset, source_in: Time, speed: Speed) -> Result<Time> {
     let limit = asset.duration.ok_or(Error::NeedsDuration)?;
-    let frames = (limit - source_in).to_frames_floor(seq.frame_rate);
+    let frames = speed
+        .timeline_len(limit - source_in)
+        .to_frames_floor(seq.frame_rate);
     Ok(Time::from_frames(frames.max(0), seq.frame_rate))
 }
 
@@ -477,13 +480,13 @@ pub(crate) fn place_clip(
     }
     let duration = match spec.duration {
         Some(d) => seq.snap(d),
-        None => default_duration(seq, asset, spec.source_in)?,
+        None => default_duration(seq, asset, spec.source_in, spec.speed)?,
     };
     if duration < seq.frame_duration() {
         return Err(Error::TooShort);
     }
     if let Some(limit) = asset.duration {
-        if spec.source_in + duration > limit {
+        if spec.source_in + spec.speed.media_len(duration) > limit + SOURCE_SLACK {
             return Err(Error::OutsideSource {
                 clip: id,
                 detail: "runs past the end of the media".into(),
@@ -501,6 +504,9 @@ pub(crate) fn place_clip(
         duration,
         enabled: true,
         link,
+        speed: spec.speed,
+        reverse: spec.reverse,
+        transition_in: None,
     };
 
     match mode {
@@ -546,7 +552,9 @@ pub(crate) fn place_asset(
     // One length for both halves, so a picture and its sound match exactly.
     let duration = match duration {
         Some(d) => Some(seq.snap(d)),
-        None if asset.duration.is_some() => Some(default_duration(seq, asset, source_in)?),
+        None if asset.duration.is_some() => {
+            Some(default_duration(seq, asset, source_in, Speed::NORMAL)?)
+        }
         None => None,
     };
     let link = (video_track.is_some() && audio_track.is_some()).then(|| cx.link_id());
@@ -557,6 +565,8 @@ pub(crate) fn place_asset(
         source_in,
         duration,
         name: None,
+        speed: Speed::NORMAL,
+        reverse: false,
     };
     let mut placed = Placed {
         video: None,
@@ -799,7 +809,7 @@ fn check_source(assets: &OrdMap<AssetId, Asset>, frame: Time, new: &Clip) -> Res
     if new.start < Time::ZERO {
         return Err(Error::BeforeStart(new.start));
     }
-    if new.source_in < Time::ZERO {
+    if new.source_in < -SOURCE_SLACK {
         return Err(Error::OutsideSource {
             clip: new.id,
             detail: "before the start of the media".into(),
@@ -809,7 +819,7 @@ fn check_source(assets: &OrdMap<AssetId, Asset>, frame: Time, new: &Clip) -> Res
         .get(&new.asset)
         .ok_or(Error::NoSuchAsset(new.asset))?;
     if let Some(limit) = asset.duration {
-        if new.source_in + new.duration > limit {
+        if new.source_in + new.source_len() > limit + SOURCE_SLACK {
             return Err(Error::OutsideSource {
                 clip: new.id,
                 detail: "past the end of the media".into(),
@@ -844,19 +854,15 @@ pub(crate) fn trim(
     for id in &group {
         let (track, old) = locate(seq, *id)?;
         ensure_unlocked(seq, track)?;
-        let mut new = old.clone();
-        match (edge, rippling) {
-            (Edge::Head, false) => {
-                new.start = old.start + delta;
-                new.source_in = old.source_in + delta;
-                new.duration = old.duration - delta;
-            }
+        let new = match (edge, rippling) {
+            (Edge::Head, false) => old.window(old.start + delta, old.end()),
             (Edge::Head, true) => {
-                new.source_in = old.source_in + delta;
-                new.duration = old.duration - delta;
+                let mut c = old.window(old.start + delta, old.end());
+                c.start = old.start;
+                c
             }
-            (Edge::Tail, _) => new.duration = old.duration + delta,
-        }
+            (Edge::Tail, _) => old.window(old.start, old.end() + delta),
+        };
         check_source(assets, frame, &new)?;
         if !rippling {
             let hit = seq
@@ -922,12 +928,8 @@ pub(crate) fn roll(
         return Ok(());
     }
     let frame = seq.frame_duration();
-    let mut new_l = l.clone();
-    new_l.duration = l.duration + delta;
-    let mut new_r = r.clone();
-    new_r.start = r.start + delta;
-    new_r.source_in = r.source_in + delta;
-    new_r.duration = r.duration - delta;
+    let new_l = l.window(l.start, l.end() + delta);
+    let new_r = r.window(r.start + delta, r.end());
     check_source(assets, frame, &new_l)?;
     check_source(assets, frame, &new_r)?;
     take(seq, rt, r.start)?;
@@ -990,14 +992,10 @@ pub(crate) fn slide(
         return Ok(());
     }
     let frame = seq.frame_duration();
-    let mut new_prev = prev.clone();
-    new_prev.duration = prev.duration + delta;
+    let new_prev = prev.window(prev.start, prev.end() + delta);
     let mut new_c = c.clone();
     new_c.start = c.start + delta;
-    let mut new_next = next.clone();
-    new_next.start = next.start + delta;
-    new_next.source_in = next.source_in + delta;
-    new_next.duration = next.duration - delta;
+    let new_next = next.window(next.start + delta, next.end());
     for n in [&new_prev, &new_c, &new_next] {
         check_source(assets, frame, n)?;
     }
@@ -1088,5 +1086,142 @@ pub(crate) fn remove_marker(seq: &mut Sequence, id: crate::ids::MarkerId) -> Res
         .position(|m| m.id == id)
         .ok_or(Error::NothingTo("remove: no such marker"))?;
     seq.markers.remove(index);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Speed, direction and transitions
+// ---------------------------------------------------------------------------
+
+/// Change the playback speed of a clip (and the clips linked to it).
+///
+/// With [`SpeedMode::KeepMedia`] the clip keeps showing the same stretch of media, so its length
+/// on the timeline changes (rounded down to whole frames, so it never needs more media than it
+/// had). `ripple` then closes or opens the gap, as it does for a trim. With
+/// [`SpeedMode::KeepLength`] the clip stays as long as it is and shows more or less media; a
+/// reversed clip keeps its first moment, a forward clip keeps its `source_in`.
+pub(crate) fn set_speed(
+    seq: &mut Sequence,
+    assets: &OrdMap<AssetId, Asset>,
+    clip_id: ClipId,
+    speed: Speed,
+    mode: SpeedMode,
+    ripple: Ripple,
+    links: LinkMode,
+) -> Result<()> {
+    let group = expand(seq, &[clip_id], links)?;
+    let frame = seq.frame_duration();
+    let rate = seq.frame_rate;
+    let mut changes = Vec::new();
+    for id in &group {
+        let (track, old) = locate(seq, *id)?;
+        ensure_unlocked(seq, track)?;
+        if old.speed == speed {
+            continue;
+        }
+        let mut new = old.clone();
+        new.speed = speed;
+        match mode {
+            SpeedMode::KeepMedia => {
+                let frames = speed.timeline_len(old.source_len()).to_frames_floor(rate);
+                new.duration = Time::from_frames(frames, rate);
+            }
+            SpeedMode::KeepLength => {}
+        }
+        if new.duration < frame {
+            return Err(Error::TooShort);
+        }
+        if old.reverse {
+            // Keep the moment the clip starts playing from.
+            new.source_in = old.source_in + old.source_len() - new.source_len();
+        }
+        check_source(assets, frame, &new)?;
+        if ripple == Ripple::Off && new.end() > old.end() {
+            let hit = seq
+                .track(track)
+                .and_then(|t| t.clips_in(new.range()).into_iter().find(|c| c.id != new.id))
+                .map(|c| c.id);
+            if let Some(other) = hit {
+                return Err(Error::Collision {
+                    clip: new.id,
+                    other,
+                });
+            }
+        }
+        changes.push(Change { track, old, new });
+    }
+    for ch in &changes {
+        put(seq, ch.track, ch.new.clone())?;
+    }
+    if ripple != Ripple::Off {
+        let primary = changes.iter().find(|c| c.old.id == clip_id);
+        let shift = primary.map_or(Time::ZERO, |c| c.new.end() - c.old.end());
+        let primary_end = primary.map_or(Time::ZERO, |c| c.old.end());
+        let edited: BTreeSet<TrackId> = changes.iter().map(|c| c.track).collect();
+        for ch in &changes {
+            shift_from(seq.track_mut(ch.track)?, ch.old.end(), shift)?;
+        }
+        if ripple == Ripple::Sync {
+            for tid in unlocked_tracks(seq) {
+                if !edited.contains(&tid) {
+                    shift_from(seq.track_mut(tid)?, primary_end, shift)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Play a clip (and the clips linked to it) forwards or backwards. The clip keeps its place,
+/// its length and the stretch of media it shows.
+pub(crate) fn set_reverse(
+    seq: &mut Sequence,
+    clip: ClipId,
+    reverse: bool,
+    links: LinkMode,
+) -> Result<()> {
+    for id in expand(seq, &[clip], links)? {
+        let (track, mut c) = locate(seq, id)?;
+        ensure_unlocked(seq, track)?;
+        c.reverse = reverse;
+        put(seq, track, c)?;
+    }
+    Ok(())
+}
+
+/// Put a transition into `clip` from the clip before it, or remove it (`None`). With
+/// [`LinkMode::Follow`], linked audio clips get a crossfade of the same length and alignment.
+pub(crate) fn set_transition(
+    seq: &mut Sequence,
+    assets: &OrdMap<AssetId, Asset>,
+    clip: ClipId,
+    transition: Option<Transition>,
+    links: LinkMode,
+) -> Result<()> {
+    let transition = transition.map(|mut t| {
+        t.duration = seq.snap(t.duration);
+        t
+    });
+    for id in expand(seq, &[clip], links)? {
+        let (tid, mut c) = locate(seq, id)?;
+        ensure_unlocked(seq, tid)?;
+        let on_audio = seq.track_position(tid).map(|(k, _)| k) == Some(TrackKind::Audio);
+        c.transition_in = transition.map(|mut t| {
+            if on_audio {
+                t.kind = crate::retime::TransitionKind::Dissolve;
+            }
+            t
+        });
+        put(seq, tid, c.clone())?;
+        if c.transition_in.is_some() {
+            let track = seq.track(tid).ok_or(Error::NoSuchTrack(tid))?;
+            if let Some(problem) = seq.transition_problem(track, &c, assets) {
+                return Err(Error::BadTransition {
+                    clip: id,
+                    reason: problem,
+                });
+            }
+        }
+    }
     Ok(())
 }

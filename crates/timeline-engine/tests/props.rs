@@ -47,6 +47,24 @@ enum Op {
         a: i64,
         b: i64,
     },
+    Speed {
+        pick: usize,
+        num: u32,
+        den: u32,
+        keep_media: bool,
+        ripple: u8,
+    },
+    Reverse {
+        pick: usize,
+        on: bool,
+    },
+    Transition {
+        pick: usize,
+        dur: i64,
+        align: u8,
+        kind: u8,
+        remove: bool,
+    },
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -80,6 +98,25 @@ fn op() -> impl Strategy<Value = Op> {
         (0usize..50, f.clone()).prop_map(|(pick, delta)| Op::Slip { pick, delta }),
         (0usize..50, f).prop_map(|(pick, delta)| Op::Slide { pick, delta }),
         (0i64..300, 0i64..300).prop_map(|(a, b)| Op::RangeDelete { a, b }),
+        (0usize..50, 1u32..9, 1u32..9, any::<bool>(), 0u8..3).prop_map(
+            |(pick, num, den, keep_media, ripple)| Op::Speed {
+                pick,
+                num,
+                den,
+                keep_media,
+                ripple
+            }
+        ),
+        (0usize..50, any::<bool>()).prop_map(|(pick, on)| Op::Reverse { pick, on }),
+        (0usize..50, 1i64..40, 0u8..3, 0u8..9, any::<bool>()).prop_map(
+            |(pick, dur, align, kind, remove)| Op::Transition {
+                pick,
+                dur,
+                align,
+                kind,
+                remove
+            }
+        ),
     ]
 }
 
@@ -130,6 +167,20 @@ proptest! {
                 Op::Roll { pick: p, delta } => ed.roll(seq, pick(p), pick(p + 1), frames(delta)),
                 Op::Slip { pick: p, delta } => ed.slip(seq, pick(p), frames(delta), LinkMode::Follow),
                 Op::Slide { pick: p, delta } => ed.slide(seq, pick(p), frames(delta)),
+                Op::Speed { pick: p, num, den, keep_media, ripple: r } => match Speed::new(num, den) {
+                    Some(sp) => ed.set_speed(seq, pick(p), sp, if keep_media { SpeedMode::KeepMedia } else { SpeedMode::KeepLength }, ripple(r), LinkMode::Follow),
+                    None => Ok(()),
+                },
+                Op::Reverse { pick: p, on } => ed.set_reverse(seq, pick(p), on, LinkMode::Follow),
+                Op::Transition { pick: p, dur, align, kind, remove } => {
+                    let names = TransitionKind::all_names();
+                    let tr = Transition {
+                        kind: TransitionKind::parse(&names[kind as usize]).unwrap(),
+                        duration: frames(dur),
+                        alignment: [Alignment::Center, Alignment::StartAtCut, Alignment::EndAtCut][align as usize],
+                    };
+                    ed.set_transition(seq, pick(p), if remove { None } else { Some(tr) }, LinkMode::Follow)
+                }
                 Op::RangeDelete { a, b } => match TimeRange::new(frames(a.min(b)), frames(a.max(b))) {
                     Some(range) => ed.ripple_delete_range(seq, range, None),
                     None => Ok(()),

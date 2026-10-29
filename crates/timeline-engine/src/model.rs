@@ -15,6 +15,7 @@ use im::{OrdMap, Vector};
 
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
+use crate::retime::{Speed, Transition, MAX_TRANSITION_SECS};
 use crate::time::{FrameRate, Time, TimeRange, Timecode};
 
 /// One video stream of a media file.
@@ -111,7 +112,19 @@ pub struct Clip {
     pub enabled: bool,
     /// Clips with the same link move, split and trim together.
     pub link: Option<LinkId>,
+    /// How fast the media plays. `duration` is always the time on the timeline, so at 2x a
+    /// clip of 5 seconds shows 10 seconds of media.
+    pub speed: Speed,
+    /// Play the media backwards. The clip still shows the same stretch of media,
+    /// `source_in` up to `source_in + source_len()`, just from its last moment to its first.
+    pub reverse: bool,
+    /// A transition from the clip before into this one. The two must touch.
+    pub transition_in: Option<Transition>,
 }
+
+/// Media is allowed to overshoot its length by this much (a few ticks), so that rounding in
+/// speed changes never rejects a clip that ends exactly at the end of its file.
+pub(crate) const SOURCE_SLACK: Time = Time::from_ticks(4);
 
 impl Clip {
     /// Where the clip ends on the timeline (this time itself is not part of the clip).
@@ -127,17 +140,71 @@ impl Clip {
         }
     }
 
+    /// How much of the asset the clip shows: its length scaled by its speed.
+    pub fn source_len(&self) -> Time {
+        self.speed.media_len(self.duration)
+    }
+
     /// The span of the asset the clip shows.
     pub fn source_range(&self) -> TimeRange {
         TimeRange {
             start: self.source_in,
-            end: self.source_in + self.duration,
+            end: self.source_in + self.source_len(),
         }
     }
 
-    /// The position in the asset shown at timeline time `t`.
+    /// The position in the asset at timeline time `t`, following the clip's speed and
+    /// direction. Works for times outside the clip too (the picture the clip *would* show),
+    /// which is what transitions use.
     pub fn source_time_at(&self, t: Time) -> Time {
-        self.source_in + (t - self.start)
+        let off = t - self.start;
+        if self.reverse {
+            self.source_in + self.source_len() - self.speed.media_len(off)
+        } else {
+            self.source_in + self.speed.media_len(off)
+        }
+    }
+
+    /// Where to read the picture for the frame that starts at `t` and lasts `frame`. A reversed
+    /// clip shows the mirror image of each forward frame, so the frame is read from the start
+    /// of the media stretch it covers.
+    pub fn frame_source_time(&self, t: Time, frame: Time) -> Time {
+        if self.reverse {
+            self.source_time_at(t + frame)
+        } else {
+            self.source_time_at(t)
+        }
+    }
+
+    /// The stretch of media played between timeline times `from` and `to` (either may lie
+    /// outside the clip). Always returned low to high.
+    pub fn source_span(&self, from: Time, to: Time) -> (Time, Time) {
+        let (a, b) = (self.source_time_at(from), self.source_time_at(to));
+        (a.min(b), a.max(b))
+    }
+
+    /// A copy that covers timeline `start..end`, with `source_in` set so every moment keeps
+    /// showing the same media. `start..end` may be wider than the clip (it then shows media
+    /// beyond what it showed before) or narrower. Nothing else changes.
+    pub fn window(&self, start: Time, end: Time) -> Clip {
+        let mut c = self.clone();
+        c.start = start;
+        c.duration = end - start;
+        c.source_in = if self.reverse {
+            self.source_in + self.source_len() - self.speed.media_len(end - self.start)
+        } else {
+            self.source_in + self.speed.media_len(start - self.start)
+        };
+        c
+    }
+
+    /// True when `from..to` of timeline time, played by this clip, stays inside the media.
+    pub(crate) fn media_covers(&self, from: Time, to: Time, asset: &Asset) -> bool {
+        let (lo, hi) = self.source_span(from, to);
+        lo >= -SOURCE_SLACK
+            && asset
+                .duration
+                .is_none_or(|limit| hi <= limit + SOURCE_SLACK)
     }
 }
 
@@ -211,6 +278,26 @@ impl Track {
         }
         found.extend(self.items.range(range.start..range.end).map(|(_, c)| c));
         found
+    }
+
+    /// The transition under way at time `t`, if any: the outgoing clip, the incoming clip,
+    /// the transition and the span of timeline it covers.
+    pub fn transition_at(
+        &self,
+        t: Time,
+        frame: Time,
+    ) -> Option<(&Clip, &Clip, Transition, Time, Time)> {
+        for b in [self.clip_at(t), self.clip_from(t)].into_iter().flatten() {
+            let Some(tr) = b.transition_in else { continue };
+            let (w0, w1) = tr.window(b.start, frame);
+            if t < w0 || t >= w1 {
+                continue;
+            }
+            if let Some(a) = self.clip_before(b.start).filter(|a| a.end() == b.start) {
+                return Some((a, b, tr, w0, w1));
+            }
+        }
+        None
     }
 
     /// The last clip that starts before `t`.
@@ -459,6 +546,80 @@ impl Sequence {
         points
     }
 
+    /// Why the transition into `clip` cannot work, or `None` if it is fine (or there is none).
+    pub(crate) fn transition_problem(
+        &self,
+        track: &Track,
+        clip: &Clip,
+        assets: &OrdMap<AssetId, Asset>,
+    ) -> Option<String> {
+        let tr = clip.transition_in?;
+        let frame = self.frame_duration();
+        if track.kind == TrackKind::Audio && !tr.kind.works_on_audio() {
+            return Some("audio tracks only take dissolve (crossfade)".into());
+        }
+        if tr.duration < frame || !tr.duration.is_on_frame(self.frame_rate) {
+            return Some("must last a whole number of frames, at least one".into());
+        }
+        if tr.duration.as_secs_f64() > MAX_TRANSITION_SECS {
+            return Some(format!("longer than {MAX_TRANSITION_SECS} seconds"));
+        }
+        let Some(prev) = track
+            .clip_before(clip.start)
+            .filter(|p| p.end() == clip.start)
+        else {
+            return Some("needs a clip touching it on the left".into());
+        };
+        let (before, after) = (tr.before_cut(frame), tr.after_cut(frame));
+        if before > prev.duration || after > clip.duration {
+            return Some("is longer than the clips it joins".into());
+        }
+        if let Some(next) = track
+            .clip_from(clip.end())
+            .filter(|n| n.start == clip.end())
+        {
+            if let Some(nt) = next.transition_in {
+                if clip.start + after + nt.before_cut(frame) > next.start {
+                    return Some("overlaps the transition at the other end of the clip".into());
+                }
+            }
+        }
+        let (Some(pa), Some(ca)) = (assets.get(&prev.asset), assets.get(&clip.asset)) else {
+            return Some("a clip's media is missing".into());
+        };
+        if !prev.media_covers(prev.end(), prev.end() + after, pa) {
+            return Some("the outgoing clip has no spare media after its end".into());
+        }
+        if !clip.media_covers(clip.start - before, clip.start, ca) {
+            return Some("the incoming clip has no spare media before its start".into());
+        }
+        None
+    }
+
+    /// Drop every transition that no longer works (after an edit moved a clip away, trimmed
+    /// away its spare media, and so on).
+    pub(crate) fn prune_transitions(&mut self, assets: &OrdMap<AssetId, Asset>) {
+        let mut bad: Vec<(TrackKind, usize, Time)> = Vec::new();
+        for kind in [TrackKind::Video, TrackKind::Audio] {
+            for (i, track) in self.tracks_of(kind).iter().enumerate() {
+                for clip in track.clips() {
+                    if clip.transition_in.is_some()
+                        && self.transition_problem(track, clip, assets).is_some()
+                    {
+                        bad.push((kind, i, clip.start));
+                    }
+                }
+            }
+        }
+        for (kind, i, start) in bad {
+            if let Some(track) = self.tracks_of_mut(kind).get_mut(i) {
+                if let Some(clip) = track.items.get_mut(&start) {
+                    clip.transition_in = None;
+                }
+            }
+        }
+    }
+
     pub(crate) fn validate(&self, assets: &OrdMap<AssetId, Asset>) -> Result<()> {
         let bad = |msg: String| {
             Err(Error::Invalid(format!(
@@ -515,9 +676,12 @@ impl Sequence {
                         ));
                     }
                     if let Some(limit) = asset.duration {
-                        if clip.source_in + clip.duration > limit {
+                        if clip.source_in + clip.source_len() > limit + SOURCE_SLACK {
                             return bad(format!("{} runs past the end of its media", clip.id));
                         }
+                    }
+                    if let Some(problem) = self.transition_problem(track, clip, assets) {
+                        return bad(format!("transition into {}: {problem}", clip.id));
                     }
                     if let Some(prev) = previous {
                         if prev.end() > clip.start {

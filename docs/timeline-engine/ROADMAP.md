@@ -14,8 +14,6 @@
 
 | Item | Belongs to |
 |---|---|
-| Transitions between clips (dissolve and so on) | Video Editing / Effects |
-| Speed changes and reverse | Video Editing |
 | Keyframes (volume, position, opacity over time) | Keyframe |
 | Effects and colour on clips | Effects |
 | Opacity, blend modes, transforms | Compositing |

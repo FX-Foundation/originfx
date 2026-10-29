@@ -9,12 +9,12 @@ use media_engine::{
 };
 use render_engine::{
     export_sequence, Error, ExportOptions, FileSource, MediaSource, MissingMedia, Phase,
-    RenderSettings,
+    RenderSettings, Renderer,
 };
 use timeline_engine::media::probe_asset;
 use timeline_engine::{
-    AssetId, ClipSpec, Editor, FrameRate, LinkMode, PlaceMode, SequenceId, SequenceSettings, Time,
-    TimeRange,
+    Alignment, AssetId, ClipSpec, Editor, FrameRate, LinkMode, PlaceMode, Ripple, SequenceId,
+    SequenceSettings, Speed, SpeedMode, Time, TimeRange, Transition, TransitionKind,
 };
 
 fn frame(w: u32, h: u32, rgba: [u8; 4]) -> VideoFrame {
@@ -585,4 +585,112 @@ fn a_png_still_is_held_for_any_length_and_fitted_to_the_frame() {
         let left = f.data[(18 * 64 + 5) * 4..(18 * 64 + 5) * 4 + 3].to_vec();
         assert_eq!(left, [0, 0, 0], "bar at frame {frame}");
     }
+}
+
+#[test]
+fn a_fast_reversed_clip_exports_with_the_right_frames_and_length() {
+    let mut s = show(small());
+    let a = s.path("a.nut");
+    // 4 s; frame n is red level 2n.
+    make_clip(
+        &a,
+        (64, 36),
+        (24, 1),
+        4,
+        |n| [(n * 2) as u8, 0, 0, 255],
+        true,
+    );
+    let id = s.import(&a);
+    s.lay(id, 0.0, 0.0, 3.5, true, true);
+    let seq = s.seq;
+    let v = s.ed.project().sequence(seq).unwrap().video_tracks()[0]
+        .clips()
+        .next()
+        .unwrap()
+        .id;
+    s.ed.set_speed(
+        seq,
+        v,
+        Speed::new(2, 1).unwrap(),
+        SpeedMode::KeepMedia,
+        Ripple::Off,
+        LinkMode::Follow,
+    )
+    .unwrap();
+    s.ed.set_reverse(seq, v, true, LinkMode::Follow).unwrap();
+
+    // 3.5 s of media at 2x is 42 frames; frame k is source frame 82 - 2k.
+    let mut r = Renderer::new(
+        s.ed.project(),
+        seq,
+        FileSource::new(),
+        RenderSettings::default(),
+    )
+    .unwrap();
+    for k in [0i64, 1, 20, 41] {
+        let want = (2 * (82 - 2 * k)) as u8;
+        let got = colour_of(&r.frame(k).unwrap());
+        assert_eq!(got, [want, 0, 0], "frame {k}");
+    }
+
+    let out = s.path("out.mp4");
+    let report = export_sequence(
+        s.ed.project(),
+        seq,
+        &out,
+        &ExportSettings::new(ExportPreset::Mp4H264),
+        &ExportOptions {
+            temp_dir: Some(s.dir.path().to_path_buf()),
+            ..Default::default()
+        },
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(report.frames, 42);
+    let info = probe(&out).unwrap();
+    assert!((info.duration_secs.unwrap() - 1.75).abs() < 0.1);
+}
+
+#[test]
+fn a_dissolve_between_real_files_blends_their_colours() {
+    let mut s = show(small());
+    let (red, blue) = (
+        rgb_clip(&s, "r.nut", [200, 0, 0, 255]),
+        rgb_clip(&s, "b.nut", [0, 0, 200, 255]),
+    );
+    let (red, blue) = (s.import(&red), s.import(&blue));
+    s.lay(red, 0.0, 0.0, 1.0, true, false);
+    s.lay(blue, 1.0, 0.5, 1.0, true, false);
+    let seq = s.seq;
+    let second = s.ed.project().sequence(seq).unwrap().video_tracks()[0]
+        .clips()
+        .nth(1)
+        .unwrap()
+        .id;
+    s.ed.set_transition(
+        seq,
+        second,
+        Some(Transition {
+            kind: TransitionKind::Dissolve,
+            duration: Time::from_secs_f64(0.5),
+            alignment: Alignment::Center,
+        }),
+        LinkMode::Follow,
+    )
+    .unwrap();
+    let mut r = Renderer::new(
+        s.ed.project(),
+        seq,
+        FileSource::new(),
+        RenderSettings::default(),
+    )
+    .unwrap();
+    // Window is 0.75 s to 1.25 s (frames 18..30); frame 24 is the cut.
+    assert_eq!(colour_of(&r.frame(17).unwrap()), [200, 0, 0]);
+    let mid = colour_of(&r.frame(24).unwrap());
+    assert!(
+        mid[0] > 80 && mid[0] < 120 && mid[2] > 80 && mid[2] < 120,
+        "{mid:?}"
+    );
+    assert_eq!(colour_of(&r.frame(30).unwrap()), [0, 0, 200]);
 }

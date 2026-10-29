@@ -30,7 +30,6 @@
 | Item | Engine |
 |---|---|
 | Opacity, blend modes, transforms, masks | Compositing |
-| Transitions, speed changes, reverse | Video Editing |
 | Volume, pan, fades, effects on sound | Audio |
 | Animated values over time | Keyframe |
 | Blur, colour grading and other effects | Effects |

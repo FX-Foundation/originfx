@@ -39,9 +39,10 @@ exactly, caches frames, writes 19 export formats, makes proxies, carries subtitl
 chapters, and can use the GPU (NVIDIA CUDA and NVENC, VA-API) when asked. Software output
 is the default and GPU use is always opt-in.
 
-**The Timeline Engine and the Render Engine are built and tested too.** You can build a
+**The Timeline, Render and Video Editing engines are built and tested too.** You can build a
 project from the command line (`originfx timeline`), edit it with undo and redo, and render it
 to any of the 19 formats with `originfx render`, or save one picture with `originfx render-frame`.
+Clips can be sped up, slowed down and reversed, and joined with dissolves, dips, wipes and pushes.
 
 ### Engines
 
@@ -52,7 +53,7 @@ OriginFX is built as ten engines, one at a time, in this order. Each has its own
 | 1 | Media | **Done and tested** | [Guide](docs/media-engine/README.md) |
 | 2 | Timeline | **Done and tested** | [Guide](docs/timeline-engine/README.md) |
 | 3 | Render | **Done and tested** | [Guide](docs/render-engine/README.md) |
-| 4 | Video Editing | Planned | n/a |
+| 4 | Video Editing | **Done and tested** | [Guide](docs/video-editing/README.md) |
 | 5 | Audio | Planned | n/a |
 | 6 | Keyframe | Planned | n/a |
 | 7 | Effects | Planned | n/a |

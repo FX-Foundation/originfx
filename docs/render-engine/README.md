@@ -96,5 +96,6 @@ cargo test -p originfx-render-engine
 
 ## What it is not (yet)
 
-Opacity, transforms, blend modes, effects, transitions, speed changes and keyframes come with the engines that own them
-(see [ROADMAP.md](ROADMAP.md)).
+Opacity, transforms, blend modes, effects and keyframes come with the engines that own them
+(see [ROADMAP.md](ROADMAP.md)). Speed, reverse and transitions are rendered here and described in the
+[Video Editing Engine guide](../video-editing/README.md).

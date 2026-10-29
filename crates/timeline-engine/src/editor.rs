@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
 use crate::model::{Marker, MarkerColour, NewAsset, Project, SequenceSettings, TrackKind};
 use crate::ops::{self, ClipSpec, Edge, LinkMode, PlaceMode, Placed, Ripple, TrackUpdate};
+use crate::retime::{Speed, SpeedMode, Transition};
 use crate::time::{Time, TimeRange};
 
 /// How many edits can be undone before the oldest are forgotten.
@@ -163,6 +164,12 @@ impl Editor {
         let mut work = self.project.clone();
         let out = f(&mut work)?;
         if let Some(id) = check {
+            // A transition whose clips no longer touch, or no longer have spare media, is dropped
+            // rather than failing the edit that made it impossible.
+            let assets = work.assets.clone();
+            if let Some(seq) = work.sequences.get_mut(&id) {
+                seq.prune_transitions(&assets);
+            }
             let seq = work.sequence(id).ok_or(Error::NoSuchSequence(id))?;
             seq.validate(work.assets())?;
         }
@@ -449,6 +456,67 @@ impl Editor {
                 .get_mut(&seq)
                 .ok_or(Error::NoSuchSequence(seq))?;
             ops::slide(s, &assets, clip, delta)
+        })
+    }
+
+    // ----- speed, direction, transitions ------------------------------------------
+
+    /// Change how fast a clip plays. See [`SpeedMode`] for what happens to its length, and
+    /// `ripple` for what happens to the clips after it.
+    pub fn set_speed(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        speed: Speed,
+        mode: SpeedMode,
+        ripple: Ripple,
+        links: LinkMode,
+    ) -> Result<()> {
+        self.apply("Change speed", Some(seq), |p| {
+            let assets = p.assets.clone();
+            let s = p
+                .sequences
+                .get_mut(&seq)
+                .ok_or(Error::NoSuchSequence(seq))?;
+            ops::set_speed(s, &assets, clip, speed, mode, ripple, links)
+        })
+    }
+
+    /// Play a clip backwards (or forwards again).
+    pub fn set_reverse(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        reverse: bool,
+        links: LinkMode,
+    ) -> Result<()> {
+        let label = if reverse { "Reverse" } else { "Play forwards" };
+        self.edit_seq(label, seq, |s, _| ops::set_reverse(s, clip, reverse, links))
+    }
+
+    /// Put a transition into `clip` from the clip before it (`None` removes it). The clips must
+    /// touch and have enough spare media; otherwise this fails with
+    /// [`Error::BadTransition`] and nothing changes. With [`LinkMode::Follow`] linked audio
+    /// clips get a crossfade to match.
+    pub fn set_transition(
+        &mut self,
+        seq: SequenceId,
+        clip: ClipId,
+        transition: Option<Transition>,
+        links: LinkMode,
+    ) -> Result<()> {
+        let label = if transition.is_some() {
+            "Add transition"
+        } else {
+            "Remove transition"
+        };
+        self.apply(label, Some(seq), |p| {
+            let assets = p.assets.clone();
+            let s = p
+                .sequences
+                .get_mut(&seq)
+                .ok_or(Error::NoSuchSequence(seq))?;
+            ops::set_transition(s, &assets, clip, transition, links)
         })
     }
 
