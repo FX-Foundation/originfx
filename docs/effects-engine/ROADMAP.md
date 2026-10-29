@@ -29,7 +29,7 @@
 
 | Item | Engine |
 |---|---|
-| Opacity, blend modes, transforms, masks, keying composites | Compositing |
+| Keying composites | Compositing (opacity, blend modes, transforms and masks are done: [Compositing Engine](../compositing-engine/README.md)) |
 | Text, shapes, animated graphics | Motion Graphics |
 | Effects from plug-ins (OFX, custom shaders) | Plugin |
 | Effect settings panel, keyframe lanes | the interface, once it exists |

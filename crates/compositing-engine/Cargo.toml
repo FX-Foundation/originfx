@@ -1,0 +1,12 @@
+[package]
+name = "originfx-compositing-engine"
+description = "OriginFX Compositing Engine: blend modes, opacity, transform, crop and masks on RGBA pixels"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "compositing_engine"

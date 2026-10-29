@@ -12,7 +12,7 @@ The ten engines are built one at a time, in this order. Each engine lives in its
 | 5 | Audio | **Done and tested** | [docs/audio-engine](audio-engine/README.md) |
 | 6 | Keyframe | **Done and tested** | [docs/keyframe-engine](keyframe-engine/README.md) |
 | 7 | Effects | **Done and tested** | [docs/effects-engine](effects-engine/README.md) |
-| 8 | Compositing | Planned | n/a |
+| 8 | Compositing | **Done and tested** | [docs/compositing-engine](compositing-engine/README.md) |
 | 9 | Motion Graphics | Planned | n/a |
 | 10 | Plugin | Planned | n/a |
 

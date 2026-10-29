@@ -537,6 +537,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "originfx-compositing-engine"
+version = "0.1.0"
+
+[[package]]
 name = "originfx-effects-engine"
 version = "0.1.0"
 
@@ -560,6 +564,7 @@ name = "originfx-render-engine"
 version = "0.1.0"
 dependencies = [
  "originfx-audio-engine",
+ "originfx-compositing-engine",
  "originfx-effects-engine",
  "originfx-media-engine",
  "originfx-timeline-engine",
@@ -573,6 +578,7 @@ version = "0.1.0"
 dependencies = [
  "im",
  "originfx-audio-engine",
+ "originfx-compositing-engine",
  "originfx-effects-engine",
  "originfx-keyframe-engine",
  "originfx-media-engine",

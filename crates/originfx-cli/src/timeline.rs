@@ -172,7 +172,8 @@ enum Cmd {
         #[arg(long, allow_hyphen_values = true, conflicts_with = "db")]
         normalize: Option<f64>,
     },
-    /// Put a keyframe on a value that changes over time: gain (dB), pan (%) or speed (a ratio).
+    /// Put a keyframe on a value that changes over time: gain (dB), pan (%), speed (a ratio), or a
+    /// picture value (opacity, x, y, scale-x, scale-y, rotation, crop-*, mask-*).
     /// The target is a clip (`clip7`), an audio track (`a1`) or `master`. `at` is in seconds on
     /// the timeline. A speed key on a clip makes a speed ramp.
     Key {
@@ -194,6 +195,24 @@ enum Cmd {
     },
     /// Remove all keyframes of a value; its fixed value applies again.
     ClearKeys { target: String, param: String },
+    /// Set a picture clip's opacity, position, scale, rotation, crop or mask value, for example
+    /// `look clip3 opacity 50` or `look clip3 scale-x 120`. (Use `key` to animate them.)
+    Look {
+        clip: String,
+        /// opacity, x, y, scale-x, scale-y, rotation, crop-left/right/top/bottom,
+        /// mask-x, mask-y, mask-width, mask-height, mask-feather.
+        param: String,
+        value: String,
+    },
+    /// Choose how a picture clip's colour combines with the layers beneath, or `list`.
+    Blend { clip: String, mode: String },
+    /// Mask a picture clip: `rect` or `ellipse` (add `--invert` to show the outside), or `off`.
+    Mask {
+        clip: String,
+        shape: String,
+        #[arg(long)]
+        invert: bool,
+    },
     /// Picture effects on a clip: colour, blur, sharpen, vignette and more.
     Effect {
         #[command(subcommand)]
@@ -317,8 +336,10 @@ fn parse_target(p: &Project, seq: SequenceId, text: &str) -> Result<Target, Stri
 }
 
 fn parse_param(text: &str) -> Result<Param, String> {
-    Param::parse(&text.trim().to_ascii_lowercase())
-        .ok_or_else(|| format!("'{text}' cannot be animated; try gain, pan or speed"))
+    Param::parse(&text.trim().to_ascii_lowercase()).ok_or_else(|| {
+        let names: Vec<&str> = Param::ALL.iter().map(|p| p.as_str()).collect();
+        format!("'{text}' is not a value; try {}", names.join(", "))
+    })
 }
 
 /// A keyframe value in the unit of its parameter: dB (or `-inf`), percent, or a speed ratio.
@@ -328,6 +349,8 @@ fn parse_value(param: Param, text: &str) -> Result<f64, String> {
         Param::Gain => t.trim_end_matches("dB").trim_end_matches("db").trim(),
         Param::Pan => t.trim_end_matches('%').trim(),
         Param::Speed => t.trim_end_matches('x').trim(),
+        Param::Rotation => t.trim_end_matches("deg").trim_end_matches('°').trim(),
+        _ => t.trim_end_matches('%').trim(),
     };
     if param == Param::Gain && t.eq_ignore_ascii_case("-inf") {
         return Ok(param.range().0);
@@ -770,6 +793,62 @@ pub fn run(args: TimelineArgs) -> CliResult {
             save(&ed, &path, before)?;
             println!("cleared");
         }
+        Cmd::Look { clip, param, value } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let param = parse_param(&param)?;
+            if !param.is_look() {
+                return Err(format!(
+                    "{param} is not a picture setting; use `clip-audio` or `speed`"
+                )
+                .into());
+            }
+            let v = parse_value(param, &value)?;
+            ed.set_look_value(seq, ClipId(id_number(&clip)?), param, v)?;
+            save(&ed, &path, before)?;
+            println!("{param} {v}{}", param.unit());
+        }
+        Cmd::Blend { clip, mode } => {
+            if mode.eq_ignore_ascii_case("list") {
+                for m in timeline_engine::BlendMode::ALL {
+                    println!("{}", m.name());
+                }
+                return Ok(());
+            }
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let m = timeline_engine::BlendMode::parse(&mode.to_ascii_lowercase())
+                .ok_or_else(|| format!("unknown blend mode '{mode}'; try `blend x list`"))?;
+            ed.set_blend_mode(seq, ClipId(id_number(&clip)?), m)?;
+            save(&ed, &path, before)?;
+            println!("{}", m.name());
+        }
+        Cmd::Mask {
+            clip,
+            shape,
+            invert,
+        } => {
+            let mut ed = load(&path)?;
+            let before = transitions(ed.project());
+            let seq = first_sequence(ed.project())?;
+            let id = ClipId(id_number(&clip)?);
+            if shape.eq_ignore_ascii_case("off") {
+                ed.remove_mask(seq, id)?;
+                println!("mask removed");
+            } else {
+                let s = timeline_engine::MaskShape::parse(&shape.to_ascii_lowercase())
+                    .ok_or("shape must be rect, ellipse or off")?;
+                ed.set_mask(seq, id, s, invert)?;
+                println!(
+                    "{} mask{}",
+                    s.name(),
+                    if invert { " (inverted)" } else { "" }
+                );
+            }
+            save(&ed, &path, before)?;
+        }
         Cmd::Effect { cmd } => match cmd {
             FxCmd::Kinds => {
                 for k in EffectKind::ALL {
@@ -920,6 +999,30 @@ pub fn run(args: TimelineArgs) -> CliResult {
                         }
                         if c.reverse {
                             notes += " reversed";
+                        }
+                        if !c.transform.is_default() {
+                            let t = &c.transform;
+                            notes +=
+                                &format!(
+                                " [look opacity {} x {} y {} scale {}x{} rot {} crop {}/{}/{}/{}]",
+                                t.opacity, t.x, t.y, t.scale_x, t.scale_y, t.rotation,
+                                t.crop_left, t.crop_right, t.crop_top, t.crop_bottom
+                            );
+                        }
+                        if c.blend != timeline_engine::BlendMode::Normal {
+                            notes += &format!(" [blend {}]", c.blend.name());
+                        }
+                        if let Some(m) = &c.mask {
+                            notes += &format!(
+                                " [{} mask{} at {},{} size {}x{} feather {}]",
+                                m.shape.name(),
+                                if m.invert { " inverted" } else { "" },
+                                m.x,
+                                m.y,
+                                m.width,
+                                m.height,
+                                m.feather
+                            );
                         }
                         for e in &c.effects {
                             notes += &format!(

@@ -27,7 +27,7 @@
 
 | Item | Engine |
 |---|---|
-| Animated position, scale, rotation and opacity | Compositing |
+| Animated position, scale, rotation and opacity | Done in the [Compositing Engine](../compositing-engine/README.md) |
 | Animated effect settings | Done: [Effects Engine](../effects-engine/README.md) |
 | Animated text and shape properties | Motion Graphics |
 | Curve editor, timeline lanes for keys | the interface, once it exists |

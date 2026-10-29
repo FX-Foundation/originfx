@@ -14,9 +14,9 @@
 
 | Item | Belongs to |
 |---|---|
-| Keyframes for position and opacity over time | Compositing (volume, pan and speed keyframes are done: [Keyframe Engine](../keyframe-engine/README.md)) |
+| Keyframes for position and opacity over time | Done in the [Compositing Engine](../compositing-engine/README.md) (volume, pan and speed keyframes are done: [Keyframe Engine](../keyframe-engine/README.md)) |
 | Effects and colour on clips | Effects (done: [Effects Engine](../effects-engine/README.md)) |
-| Opacity, blend modes, transforms | Compositing |
+| Opacity, blend modes, transforms | Done in the [Compositing Engine](../compositing-engine/README.md) |
 | Nested sequences (a sequence used as a clip) | Next step for this engine once Render exists |
 | Copy / paste of clips between sequences | This engine, with the editor UI |
 | Multicam, subclips, proxies per clip | Later |

@@ -6,6 +6,7 @@
 //! private copy of the project, which is thrown away on error, so every public
 //! edit is all-or-nothing.
 
+use crate::compositing::{BlendMode, Mask, MaskShape, Transform};
 use std::collections::{BTreeSet, HashMap};
 
 use im::OrdMap;
@@ -544,6 +545,9 @@ pub(crate) fn place_clip(
         fade_out: None,
         anim: Animation::default(),
         effects: Vec::new(),
+        transform: Transform::default(),
+        blend: BlendMode::Normal,
+        mask: None,
     };
 
     match mode {
@@ -1401,7 +1405,14 @@ fn place_of(seq: &Sequence, target: Target, param: Param, links: LinkMode) -> Re
 /// Check that a clip can take this parameter.
 fn clip_can(seq: &Sequence, tid: TrackId, id: ClipId, param: Param) -> Result<()> {
     let is_audio = seq.track_position(tid).map(|(k, _)| k) == Some(TrackKind::Audio);
-    if param != Param::Speed && !is_audio {
+    if param.is_look() {
+        if is_audio {
+            return Err(Error::NotPicture(id));
+        }
+        if param.is_mask() && !seq.clips().any(|(_, c)| c.id == id && c.mask.is_some()) {
+            return Err(bad_key(format!("{id} has no mask to animate")));
+        }
+    } else if param != Param::Speed && !is_audio {
         return Err(Error::NotAudio(id));
     }
     Ok(())
@@ -1426,11 +1437,7 @@ pub(crate) fn set_keyframe(
                 if time < c.start || time > c.end() {
                     return Err(Error::NotInsideClip { clip: id, time });
                 }
-                let fixed = match param {
-                    Param::Gain => f64::from(c.gain.db()),
-                    Param::Pan => f64::from(c.pan.percent()),
-                    Param::Speed => c.speed.as_f64(),
-                };
+                let fixed = c.fixed_value(param);
                 key_into(
                     &mut c.anim,
                     param,
@@ -1715,6 +1722,85 @@ pub(crate) fn clear_effect_animation(
     let i = setting_index(e, name)?;
     if e.curves[i].take().is_none() {
         return Err(Error::NothingTo("clear: that setting is not animated"));
+    }
+    put(seq, tid, c)
+}
+
+// ---------------------------------------------------------------------------
+// Look: opacity, transform, crop, blend mode, mask
+// ---------------------------------------------------------------------------
+
+fn check_look(param: Param, value: f64) -> Result<()> {
+    if !param.contains(value) {
+        let (lo, hi) = param.range();
+        return Err(Error::BadLook(format!(
+            "{param} must be between {lo} and {hi} ({})",
+            param.unit()
+        )));
+    }
+    Ok(())
+}
+
+/// Set the fixed value of a look parameter (opacity, x, y, scale, rotation, crop, or a mask
+/// value). Refused while the value is animated.
+pub(crate) fn set_look_value(
+    seq: &mut Sequence,
+    clip: ClipId,
+    param: Param,
+    value: f64,
+) -> Result<()> {
+    if !param.is_look() {
+        return Err(Error::BadLook(format!("{param} is not a picture setting")));
+    }
+    check_look(param, value)?;
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    if c.anim.is_animated(param) {
+        return Err(Error::Animated {
+            what: format!("{param} of {clip}"),
+        });
+    }
+    let done = if param.is_mask() {
+        match c.mask.as_mut() {
+            Some(m) => m.set(param, value),
+            None => return Err(Error::BadLook(format!("{clip} has no mask; add one first"))),
+        }
+    } else {
+        c.transform.set(param, value)
+    };
+    debug_assert!(done);
+    put(seq, tid, c)
+}
+
+pub(crate) fn set_blend_mode(seq: &mut Sequence, clip: ClipId, mode: BlendMode) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    c.blend = mode;
+    put(seq, tid, c)
+}
+
+/// Add a mask (a new one covers the middle half of the frame), or change the shape and
+/// inversion of the one there.
+pub(crate) fn set_mask(
+    seq: &mut Sequence,
+    clip: ClipId,
+    shape: MaskShape,
+    invert: bool,
+) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    let mut m = c.mask.unwrap_or_else(|| Mask::new(shape));
+    m.shape = shape;
+    m.invert = invert;
+    c.mask = Some(m);
+    put(seq, tid, c)
+}
+
+/// Take the mask off, along with any animation of it.
+pub(crate) fn remove_mask(seq: &mut Sequence, clip: ClipId) -> Result<()> {
+    let (tid, mut c) = effect_clip(seq, clip)?;
+    if c.mask.take().is_none() {
+        return Err(Error::NothingTo("remove: the clip has no mask"));
+    }
+    for p in Mask::PARAMS {
+        c.anim.remove(p);
     }
     put(seq, tid, c)
 }

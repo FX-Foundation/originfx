@@ -145,10 +145,11 @@ impl<S: MediaSource> Renderer<S> {
     }
 
     /// Draw one clip's picture at `source_time` onto `canvas`, fitted to the frame, with the clip's
-    /// effects applied. `t` is the timeline time of the frame (effect settings can be animated).
+    /// effects and look (opacity, transform, crop, mask, blend mode) applied. `t` is the timeline
+    /// time of the frame, since all of those can be animated.
     ///
-    /// Effects see the clip on its own transparent canvas, so a blur or a vignette never mixes
-    /// with the layers underneath.
+    /// The clip is drawn on its own transparent canvas, so a blur or a vignette never mixes with
+    /// the layers underneath.
     fn draw_clip(
         &mut self,
         canvas: &mut [u8],
@@ -158,7 +159,8 @@ impl<S: MediaSource> Renderer<S> {
         t: Time,
     ) -> Result<()> {
         let live = clip.live_effects_at(t);
-        if live.is_empty() {
+        let look = clip.look_at(t);
+        if live.is_empty() && look.is_plain() {
             return self.draw_clip_plain(canvas, (cw, ch), clip, source_time);
         }
         let mut own = solid(cw, ch, [0, 0, 0, 0]);
@@ -166,7 +168,18 @@ impl<S: MediaSource> Renderer<S> {
         for (kind, values) in live {
             effects_engine::apply(kind, &values, &mut own, cw, ch);
         }
-        blend_over(canvas, (cw, ch), &own, (cw, ch), (0, 0));
+        // Then the look: crop, mask, move/scale/turn, and finally lay it over what is beneath.
+        let [l, r, tp, b] = look.crop;
+        if look.crop != [0.0; 4] {
+            compositing_engine::crop(&mut own, cw, ch, l, r, tp, b);
+        }
+        if let Some(m) = &look.mask {
+            compositing_engine::mask(&mut own, cw, ch, m);
+        }
+        if !look.affine.is_identity() {
+            own = compositing_engine::transform(&own, cw, ch, &look.affine);
+        }
+        compositing_engine::composite(canvas, &own, look.opacity, look.blend);
         Ok(())
     }
 

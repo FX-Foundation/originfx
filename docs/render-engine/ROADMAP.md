@@ -29,8 +29,8 @@
 
 | Item | Engine |
 |---|---|
-| Opacity, blend modes, transforms, masks | Compositing |
+| Opacity, blend modes, transforms, masks | Done in the [Compositing Engine](../compositing-engine/README.md) |
 | Sound effects (EQ, compression), stateful processing | Audio (see its [roadmap](../audio-engine/ROADMAP.md)); levels, pan, fades and limiting are done |
-| Animated position, scale and opacity | Compositing, using the [Keyframe Engine](../keyframe-engine/README.md) curves (gain, pan and speed are done) |
+| Animated position, scale and opacity | Done in the Compositing Engine, using the [Keyframe Engine](../keyframe-engine/README.md) curves (gain, pan and speed are done) |
 | Blur and basic colour effects are done ([Effects Engine](../effects-engine/README.md)); full colour grading, LUTs, keying | Effects (roadmap) |
 | Text, shapes, animation | Motion Graphics |

@@ -15,6 +15,7 @@ use im::{OrdMap, Vector};
 
 use crate::animation::{Animation, Param};
 use crate::audio::{Fade, Gain, Pan};
+use crate::compositing::{Affine, BlendMode, Look, Mask, MaskSpec, Transform};
 use crate::effects::{Effect, MAX_EFFECTS};
 use crate::error::{Error, Result};
 use crate::ids::{AssetId, ClipId, LinkId, MarkerId, SequenceId, TrackId};
@@ -133,6 +134,13 @@ pub struct Clip {
     pub anim: Animation,
     /// Picture clips only: the effect stack, applied in order (first is applied first).
     pub effects: Vec<Effect>,
+    /// Picture clips only: opacity, position, scale, rotation and crop (fixed values; animated
+    /// ones come from `anim`).
+    pub transform: Transform,
+    /// Picture clips only: how the clip's colour combines with the layers beneath.
+    pub blend: BlendMode,
+    /// Picture clips only: an optional mask.
+    pub mask: Option<Mask>,
 }
 
 /// Media is allowed to overshoot its length by this much (a few ticks), so that rounding in
@@ -181,6 +189,67 @@ impl Clip {
             .map(|e| (e.kind, self.effect_values_at(e, t)))
             .filter(|(k, v)| !effects_engine::is_neutral(*k, v))
             .collect()
+    }
+
+    /// The fixed value of any animatable parameter (used when it has no curve).
+    pub fn fixed_value(&self, p: Param) -> f64 {
+        match p {
+            Param::Gain => f64::from(self.gain.db()),
+            Param::Pan => f64::from(self.pan.percent()),
+            Param::Speed => self.speed.as_f64(),
+            _ => self
+                .transform
+                .get(p)
+                .or_else(|| self.mask.as_ref().and_then(|m| m.get(p)))
+                .unwrap_or(0.0),
+        }
+    }
+
+    /// The value of a parameter at timeline time `t`: its curve, or its fixed value.
+    pub fn value_at(&self, p: Param, t: Time) -> f64 {
+        self.anim
+            .get(p)
+            .and_then(|c| c.eval((t - self.start).ticks()))
+            .unwrap_or_else(|| self.fixed_value(p))
+    }
+
+    /// How the clip is laid over what is beneath at timeline time `t`.
+    pub fn look_at(&self, t: Time) -> Look {
+        let v = |p| self.value_at(p, t);
+        Look {
+            opacity: v(Param::Opacity) / 100.0,
+            affine: Affine {
+                x_pct: v(Param::PositionX),
+                y_pct: v(Param::PositionY),
+                scale_x_pct: v(Param::ScaleX),
+                scale_y_pct: v(Param::ScaleY),
+                rotation_deg: v(Param::Rotation),
+            },
+            crop: [
+                v(Param::CropLeft),
+                v(Param::CropRight),
+                v(Param::CropTop),
+                v(Param::CropBottom),
+            ],
+            mask: self.mask.map(|m| MaskSpec {
+                shape: m.shape,
+                invert: m.invert,
+                x_pct: v(Param::MaskX),
+                y_pct: v(Param::MaskY),
+                width_pct: v(Param::MaskWidth),
+                height_pct: v(Param::MaskHeight),
+                feather_pct: v(Param::MaskFeather),
+            }),
+            blend: self.blend,
+        }
+    }
+
+    /// True if the clip has no look settings at all (the common case).
+    pub fn has_default_look(&self) -> bool {
+        self.transform.is_default()
+            && self.blend == BlendMode::Normal
+            && self.mask.is_none()
+            && !self.anim.iter().any(|(p, _)| p.is_look())
     }
 
     /// True if the clip has a speed ramp.
@@ -834,11 +903,30 @@ impl Sequence {
                         return bad(format!("{} has fades longer than the clip", clip.id));
                     }
                     let allowed: &[Param] = match kind {
-                        TrackKind::Video => &[Param::Speed],
-                        TrackKind::Audio => &Param::ALL,
+                        TrackKind::Video => &Param::PICTURE,
+                        TrackKind::Audio => &Param::AUDIO,
                     };
                     if let Some(p) = clip.anim.problem(allowed, Some(clip.duration.ticks())) {
                         return bad(format!("{}: {p}", clip.id));
+                    }
+                    if kind == TrackKind::Audio && !clip.has_default_look() {
+                        return bad(format!("{} is a sound clip with picture settings", clip.id));
+                    }
+                    for p in crate::compositing::Transform::PARAMS {
+                        let v = clip.transform.get(p).unwrap_or(0.0);
+                        if !p.contains(v) {
+                            return bad(format!("{}: {p} {v} is out of range", clip.id));
+                        }
+                    }
+                    if let Some(m) = &clip.mask {
+                        for p in crate::compositing::Mask::PARAMS {
+                            let v = m.get(p).unwrap_or(0.0);
+                            if !p.contains(v) {
+                                return bad(format!("{}: {p} {v} is out of range", clip.id));
+                            }
+                        }
+                    } else if clip.anim.iter().any(|(p, _)| p.is_mask()) {
+                        return bad(format!("{} animates a mask it does not have", clip.id));
                     }
                     if kind == TrackKind::Audio && !clip.effects.is_empty() {
                         return bad(format!("{} is a sound clip with picture effects", clip.id));
