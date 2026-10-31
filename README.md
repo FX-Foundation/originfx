@@ -5,7 +5,11 @@
 [![License](https://img.shields.io/badge/license-GPL%203.0-blue.svg)](LICENSE)
 [![Foundation](https://img.shields.io/badge/backed%20by-FX%20Foundation-gold.svg)](https://github.com/FX-Foundation)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
+
+---
+
 **UI designs:** [Browse the OriginFX interface designs](https://github.com/FX-Foundation/originfx/tree/design/ui)
+
 ---
 
 ## The Vision
