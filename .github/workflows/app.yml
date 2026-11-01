@@ -41,7 +41,9 @@ jobs:
           exit "$status"
       - name: Open the window for a few seconds
         run: |
-          xvfb-run -a timeout 8 ./target/release/originfx; code=$?
+          code=0
+          xvfb-run -a timeout 8 ./target/release/originfx || code=$?
+          echo "exit code: $code (124 means it was still running when the timer stopped it)"
           [ "$code" -eq 124 ] || [ "$code" -eq 0 ]
       - name: Package
         run: |
