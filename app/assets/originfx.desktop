@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OriginFX
+Comment=Open source professional video editor
+Exec=originfx
+Icon=originfx
+Categories=AudioVideo;Video;
+Terminal=false

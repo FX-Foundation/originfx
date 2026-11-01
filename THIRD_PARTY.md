@@ -92,3 +92,11 @@ with `cargo metadata --format-version 1 --locked`.
 | vcpkg | 0.2.15 | MIT/Apache-2.0 |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 |
+
+## App interface (`app/`)
+
+| Component | Licence | Notes |
+|---|---|---|
+| Slint (UI toolkit) | GPL-3.0-only (one of Slint's licence options) | Used under its GPLv3 option, which matches OriginFX. |
+| Inter (typeface) | SIL Open Font License 1.1 | Embedded in the app. |
+| Cinzel (typeface) | SIL Open Font License 1.1 | Embedded for the wordmark. Licence text: `app/ui/fonts/Cinzel-OFL.txt`. |

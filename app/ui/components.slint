@@ -1,0 +1,294 @@
+import { Theme } from "theme.slint";
+
+export component Brand inherits Rectangle {
+    // Mark + wordmark, as on the design's left panel.
+    height: 28px;
+    width: 190px;
+    Image {
+        x: 0px;
+        y: 0px;
+        width: 28px;
+        height: 28px;
+        source: @image-url("icons/mark.svg");
+    }
+    Text {
+        x: 38px;
+        y: 0px;
+        height: 26px;
+        vertical-alignment: center;
+        text: "ORIGIN";
+        font-family: "Cinzel";
+        font-size: 19px;
+        letter-spacing: 7.2px;
+        color: Theme.text;
+    }
+    Text {
+        x: 155px;
+        y: 0px;
+        height: 26px;
+        vertical-alignment: center;
+        text: "FX";
+        font-family: "Cinzel";
+        font-size: 19px;
+        letter-spacing: 4.6px;
+        color: Theme.gold;
+    }
+}
+
+export component Icon inherits Image {
+    in property <color> tint: Theme.text;
+    colorize: tint;
+    image-fit: contain;
+}
+
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> arrow: false;
+    callback clicked;
+    height: 40px;
+    border-radius: 2px;
+    background: ta.pressed ? Theme.accent.darker(0.15) : (ta.has-hover ? Theme.accent.brighter(0.1) : Theme.accent);
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 8px;
+        alignment: center;
+        Text {
+            text: root.text;
+            color: Theme.on-accent;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+        if root.arrow: Icon {
+            source: @image-url("icons/arrow-right.svg");
+            tint: Theme.on-accent;
+            width: 15px;
+            height: 15px;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component GhostButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> bordered: true;
+    callback clicked;
+    height: 40px;
+    border-radius: 2px;
+    border-width: bordered ? 1px : 0px;
+    border-color: Theme.button-border;
+    background: ta.has-hover ? Theme.hover : transparent;
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        alignment: center;
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One cell of a segmented control.
+export component SegItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> selected: false;
+    in property <length> pad: 14.4px;
+    callback clicked;
+    background: selected ? Theme.accent : (ta.has-hover ? Theme.hover : transparent);
+    HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        spacing: 7px;
+        alignment: center;
+        if root.has-icon: Icon {
+            source: root.icon;
+            tint: root.selected ? Theme.on-accent : Theme.text-2;
+            width: 15px;
+            height: 15px;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            color: root.selected ? Theme.on-accent : Theme.text;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Text-only segmented control, e.g. 720p | 1080p | 4K.
+export component Segmented inherits Rectangle {
+    in property <[string]> items;
+    in-out property <int> current;
+    height: 37px;
+    width: seg-layout.preferred-width;
+    border-width: 1px;
+    border-color: Theme.control-border;
+    background: Theme.card-bg;
+    seg-layout := HorizontalLayout {
+        for item[i] in root.items: SegItem {
+            text: item;
+            selected: root.current == i;
+            clicked => { root.current = i; }
+        }
+    }
+}
+
+export component OptionCard inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> desc;
+    in property <bool> recommended: false;
+    in property <bool> selected: false;
+    callback clicked;
+    height: 86px;
+    background: Theme.card-bg;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? Theme.accent : Theme.border;
+    Icon {
+        x: 23px;
+        y: 22px;
+        width: 19px;
+        height: 19px;
+        source: root.icon;
+        tint: Theme.accent;
+    }
+    Text {
+        x: 58px;
+        y: 21px;
+        height: 20px;
+        vertical-alignment: center;
+        text: root.title;
+        color: Theme.text;
+        font-size: 15px;
+        font-weight: 500;
+    }
+    if root.recommended: Rectangle {
+        x: 117px;
+        y: 20px;
+        height: 22px;
+        width: 97px;
+        border-width: 1px;
+        border-color: Theme.accent;
+        border-radius: 2px;
+        background: Theme.badge-bg;
+        Text {
+            text: "Recommended";
+            color: Theme.text;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    Text {
+        x: 58px;
+        y: 46px;
+        width: parent.width - 58px - 12px;
+        wrap: word-wrap;
+        text: root.desc;
+        color: Theme.text-2;
+        font-size: 13px;
+    }
+    Rectangle {
+        x: parent.width - 20px - 22px;
+        y: 21px;
+        width: 22px;
+        height: 22px;
+        border-radius: 3px;
+        border-width: root.selected ? 0px : 1px;
+        border-color: Theme.checkbox-border;
+        background: root.selected ? Theme.accent : transparent;
+        if root.selected: Icon {
+            source: @image-url("icons/check.svg");
+            tint: Theme.on-accent;
+            width: 14px;
+            height: 14px;
+            x: 4px;
+            y: 4px;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Label + helper text on the left, control on the right (step 2).
+export component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    height: 88px;
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+    Text {
+        x: 0px;
+        y: 22px;
+        height: 20px;
+        vertical-alignment: center;
+        text: root.label;
+        color: Theme.text;
+        font-size: 13px;
+        font-weight: 500;
+    }
+    Text {
+        x: 0px;
+        y: 43px;
+        height: 18px;
+        vertical-alignment: center;
+        text: root.hint;
+        color: Theme.muted;
+        font-size: 11.5px;
+    }
+    @children
+}
+
+export component SummaryRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> last: false;
+    height: last ? 58px : 59px;
+    if !root.last: Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+    Text {
+        x: 23px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.label;
+        color: Theme.muted;
+        font-size: 13px;
+    }
+    Text {
+        x: parent.width - self.width - 23px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.value;
+        color: Theme.text;
+        font-size: 13px;
+        font-weight: 500;
+    }
+}

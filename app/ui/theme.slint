@@ -1,0 +1,28 @@
+// OriginFX theme tokens, sampled from the approved UI design (Dark and Light).
+import { Palette } from "std-widgets.slint";
+
+export global Settings {
+    // 0 = System, 1 = Light, 2 = Dark
+    in-out property <int> look: 0;
+    out property <bool> dark: look == 2 || (look == 0 && Palette.color-scheme != ColorScheme.light);
+}
+
+export global Theme {
+    out property <color> page-bg: Settings.dark ? #0e0f11 : #f3f4f6;
+    out property <color> panel-bg: Settings.dark ? #141519 : #ffffff;
+    out property <color> card-bg: Settings.dark ? #141519 : #ffffff;
+    out property <color> input-bg: Settings.dark ? #101115 : #ffffff;
+    out property <color> border: Settings.dark ? #2b2c30 : #d7d8da;
+    out property <color> control-border: Settings.dark ? #2b2c30 : #bdbec2;
+    out property <color> button-border: Settings.dark ? #3a3c42 : #bdbec2;
+    out property <color> text: Settings.dark ? #f4f5f9 : #08090d;
+    out property <color> text-2: Settings.dark ? #b0b1b5 : #3c3d41;
+    out property <color> muted: Settings.dark ? #979a9f : #585b5f;
+    out property <color> accent: Settings.dark ? #2e8cff : #1f6fe2;
+    out property <color> on-accent: #ffffff;
+    out property <color> progress-off: Settings.dark ? #3a3d44 : #bbbec3;
+    out property <color> badge-bg: Settings.dark ? #182b3a : #e8eefa;
+    out property <color> checkbox-border: Settings.dark ? #3a3d44 : #9a9da3;
+    out property <color> gold: Settings.dark ? #d9a92e : #c99a24;
+    out property <color> hover: Settings.dark ? #ffffff10 : #00000008;
+}

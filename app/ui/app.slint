@@ -1,0 +1,449 @@
+import "./fonts/Inter-Regular.otf";
+import "./fonts/Inter-Medium.otf";
+import "./fonts/Inter-SemiBold.otf";
+import "./fonts/Cinzel.ttf";
+
+import { Theme, Settings } from "theme.slint";
+import { Palette } from "std-widgets.slint";
+import { Brand, Icon, PrimaryButton, GhostButton, SegItem, Segmented, OptionCard, SettingRow, SummaryRow } from "components.slint";
+
+export { Settings, Palette }
+
+export component App inherits Window {
+    title: "OriginFX";
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    min-width: 1200px;
+    min-height: 720px;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+    background: Theme.page-bg;
+
+    property <length> left-w: max(480px, root.width * 0.3889);
+
+    // ----- state -----
+    in-out property <int> step: 1;
+    in-out property <int> workspace: 0;      // 0 Simple, 1 Guided, 2 Pro
+    in-out property <int> resolution: 1;     // 720p, 1080p, 4K
+    in-out property <int> fps: 1;            // 24, 30, 60
+    in-out property <int> aspect: 0;         // 16:9, 9:16, 1:1, 21:9
+    in-out property <string> storage: "~/Videos/OriginFX";
+    in property <string> gpu-line: "Looking for your graphics card.";
+    in property <string> gpu-title: "Checking your computer";
+
+    // Theme choice lives in Settings.look (0 System, 1 Light, 2 Dark).
+    property <[string]> workspace-names: ["Simple", "Guided", "Pro"];
+    property <[string]> look-names: ["System", "Light", "Dark"];
+    property <[string]> resolution-names: ["720p", "1080p", "4K"];
+    property <[string]> fps-names: ["24", "30", "60"];
+    property <[string]> aspect-names: ["16:9", "9:16", "1:1", "21:9"];
+
+    // action: "skip", "editor", "project"
+    callback finish(string);
+
+    function next() {
+        if (root.step < 3) { root.step += 1; }
+    }
+    function back() {
+        if (root.step > 1) { root.step -= 1; }
+    }
+
+    // Keyboard: Enter continues, Escape goes back.
+    FocusScope {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        init => { self.focus(); }
+        key-pressed(event) => {
+            if (event.text == Key.Return) {
+                if (root.step < 3) { root.next(); } else { root.finish("project"); }
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                root.back();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // ----- left brand panel -----
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.left-w;
+        height: root.height;
+        background: Theme.panel-bg;
+
+        Brand {
+            x: 48px;
+            y: 47px;
+        }
+        Image {
+            x: 48px;
+            y: 288px;
+            width: 120px;
+            height: 120px;
+            source: @image-url("icons/mark.svg");
+        }
+        Text {
+            x: 48px;
+            y: 432px;
+            height: 46px;
+            vertical-alignment: center;
+            text: "Make something worth";
+            color: Theme.text;
+            font-size: 40.8px;
+        }
+        Text {
+            x: 48px;
+            y: 478px;
+            height: 46px;
+            vertical-alignment: center;
+            text: "watching.";
+            color: Theme.text;
+            font-size: 40.8px;
+        }
+        for line[i] in ["Free, open source, and private. Everything stays on", "your computer, and nobody needs to ask permission", "to edit."] : Text {
+            x: 48px;
+            y: 546px + i * 26px;
+            height: 26px;
+            vertical-alignment: center;
+            text: line;
+            color: Theme.text-2;
+            font-size: 16px;
+        }
+        Text {
+            x: 48px;
+            y: root.height - 63px;
+            height: 18px;
+            vertical-alignment: center;
+            text: "Open source under GPL-3.0 by FX Foundation";
+            color: Theme.muted;
+            font-size: 11.5px;
+        }
+    }
+
+    // ----- right content column -----
+    block := Rectangle {
+        x: root.left-w + (root.width - root.left-w - 640px) / 2;
+        y: (root.height - 587px) / 2;
+        width: 640px;
+        height: 587px;
+
+        // step indicator
+        Text {
+            x: 0px;
+            y: -1px;
+            height: 16px;
+            vertical-alignment: center;
+            text: "Step " + root.step + " of 3";
+            color: Theme.muted;
+            font-size: 12px;
+        }
+        for n in 3: Rectangle {
+            x: parent.width - 28px * 3 - 6px * 2 + n * 34px;
+            y: 6px;
+            width: 28px;
+            height: 3px;
+            background: n < root.step ? Theme.accent : Theme.progress-off;
+        }
+
+        // title and subtitle
+        Text {
+            x: 0px;
+            y: 41px;
+            height: 34px;
+            vertical-alignment: center;
+            text: root.step == 1 ? "Choose your workspace" : (root.step == 2 ? "Set project defaults" : "Workspace ready");
+            color: Theme.text;
+            font-size: 28px;
+            font-weight: 500;
+        }
+        Text {
+            x: 0px;
+            y: 84px;
+            height: 18px;
+            vertical-alignment: center;
+            text: root.step == 1 ? "Select the layout that fits your experience. You can change it at any time from the editor toolbar." : (root.step == 2 ? "Applied to every new project. Each can be changed per project." : "Your settings are saved. Start a new project or open the editor.");
+            color: Theme.text-2;
+            font-size: 14px;
+        }
+
+        // ---------- step 1 ----------
+        if root.step == 1: Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+
+            OptionCard {
+                x: 0px;
+                y: 131px;
+                width: parent.width;
+                icon: @image-url("icons/play-circle.svg");
+                title: "Simple";
+                recommended: true;
+                desc: "A focused workspace with essential tools and in-context guidance. Best for getting started.";
+                selected: root.workspace == 0;
+                clicked => { root.workspace = 0; }
+            }
+            OptionCard {
+                x: 0px;
+                y: 229px;
+                width: parent.width;
+                icon: @image-url("icons/grid.svg");
+                title: "Guided";
+                desc: "The core toolset with optional guidance. For editors who know the fundamentals.";
+                selected: root.workspace == 1;
+                clicked => { root.workspace = 1; }
+            }
+            OptionCard {
+                x: 0px;
+                y: 327px;
+                width: parent.width;
+                icon: @image-url("icons/sliders.svg");
+                title: "Pro";
+                desc: "The complete workspace: multi-track timeline, node compositing, graph editor, and full keyboard control.";
+                selected: root.workspace == 2;
+                clicked => { root.workspace = 2; }
+            }
+
+            Text {
+                x: 0px;
+                y: 457px;
+                height: 16px;
+                vertical-alignment: center;
+                text: "Look";
+                color: Theme.muted;
+                font-size: 12px;
+            }
+            look-seg := Rectangle {
+                x: 0px;
+                y: 481px;
+                height: 37px;
+                width: look-layout.preferred-width;
+                border-width: 1px;
+                border-color: Theme.control-border;
+                background: Theme.card-bg;
+                look-layout := HorizontalLayout {
+                    SegItem {
+                        text: "System";
+                        icon: @image-url("icons/monitor.svg");
+                        has-icon: true;
+                        pad: 14px;
+                        selected: Settings.look == 0;
+                        clicked => { Settings.look = 0; }
+                    }
+                    SegItem {
+                        text: "Light";
+                        icon: @image-url("icons/sun.svg");
+                        has-icon: true;
+                        pad: 14px;
+                        selected: Settings.look == 1;
+                        clicked => { Settings.look = 1; }
+                    }
+                    SegItem {
+                        text: "Dark";
+                        icon: @image-url("icons/moon.svg");
+                        has-icon: true;
+                        pad: 14px;
+                        selected: Settings.look == 2;
+                        clicked => { Settings.look = 2; }
+                    }
+                }
+            }
+
+            Text {
+                x: 279px;
+                y: 439px;
+                height: 16px;
+                vertical-alignment: center;
+                text: "Your computer";
+                color: Theme.muted;
+                font-size: 12px;
+            }
+            Rectangle {
+                x: 279px;
+                y: 462px;
+                width: parent.width - 279px;
+                height: 57px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: Theme.card-bg;
+                Icon {
+                    x: 22px;
+                    y: 19px;
+                    width: 19px;
+                    height: 19px;
+                    source: @image-url("icons/cpu.svg");
+                    tint: Theme.accent;
+                }
+                Text {
+                    x: 46px;
+                    y: 12px;
+                    height: 18px;
+                    vertical-alignment: center;
+                    text: root.gpu-title;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 500;
+                }
+                Text {
+                    x: 46px;
+                    y: 29px;
+                    height: 16px;
+                    vertical-alignment: center;
+                    text: root.gpu-line;
+                    color: Theme.text-2;
+                    font-size: 11.5px;
+                }
+            }
+        }
+
+        // ---------- step 2 ----------
+        if root.step == 2: Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+
+            SettingRow {
+                x: 0px;
+                y: 121px;
+                width: parent.width;
+                label: "Resolution";
+                hint: "Output dimensions for new projects.";
+                Segmented {
+                    x: parent.width - self.width;
+                    y: 18px;
+                    items: root.resolution-names;
+                    current <=> root.resolution;
+                }
+            }
+            SettingRow {
+                x: 0px;
+                y: 209px;
+                width: parent.width;
+                label: "Frame rate";
+                hint: "Frames per second.";
+                Segmented {
+                    x: parent.width - self.width;
+                    y: 18px;
+                    items: root.fps-names;
+                    current <=> root.fps;
+                }
+            }
+            SettingRow {
+                x: 0px;
+                y: 297px;
+                width: parent.width;
+                label: "Aspect ratio";
+                hint: "Frame proportions.";
+                Segmented {
+                    x: parent.width - self.width;
+                    y: 18px;
+                    items: root.aspect-names;
+                    current <=> root.aspect;
+                }
+            }
+            SettingRow {
+                x: 0px;
+                y: 385px;
+                width: parent.width;
+                label: "Storage location";
+                hint: "Where projects and cache are saved.";
+                Rectangle {
+                    x: parent.width - self.width;
+                    y: 18px;
+                    width: 299px;
+                    height: 37px;
+                    border-width: 1px;
+                    border-color: Theme.control-border;
+                    background: Theme.input-bg;
+                    TextInput {
+                        x: 13px;
+                        width: parent.width - 26px;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        text <=> root.storage;
+                        color: Theme.text;
+                        font-size: 13px;
+                        single-line: true;
+                    }
+                }
+            }
+        }
+
+        // ---------- step 3 ----------
+        if root.step == 3: Rectangle {
+            x: 0px;
+            y: 131px;
+            width: parent.width;
+            height: 236px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: Theme.card-bg;
+            VerticalLayout {
+                padding: 1px;
+                SummaryRow {
+                    label: "Workspace";
+                    value: root.workspace-names[root.workspace];
+                }
+                SummaryRow {
+                    label: "Appearance";
+                    value: root.look-names[Settings.look];
+                }
+                SummaryRow {
+                    label: "Video";
+                    value: root.resolution-names[root.resolution] + " · " + root.fps-names[root.fps] + " fps · " + root.aspect-names[root.aspect];
+                }
+                SummaryRow {
+                    label: "Storage";
+                    value: root.storage;
+                    last: true;
+                }
+            }
+        }
+
+        // ---------- footer actions ----------
+        if root.step == 1: GhostButton {
+            x: 0px;
+            y: 547px;
+            width: 88px;
+            text: "Skip setup";
+            bordered: false;
+            clicked => { root.finish("skip"); }
+        }
+        if root.step > 1: GhostButton {
+            x: 0px;
+            y: 547px;
+            width: 88px;
+            text: "Back";
+            clicked => { root.back(); }
+        }
+        if root.step < 3: PrimaryButton {
+            x: parent.width - self.width;
+            y: 547px;
+            width: 114px;
+            text: "Continue";
+            arrow: root.step == 1;
+            clicked => { root.next(); }
+        }
+        if root.step == 3: GhostButton {
+            x: parent.width - 112px - 12px - self.width;
+            y: 547px;
+            width: 116px;
+            text: "Open editor";
+            clicked => { root.finish("editor"); }
+        }
+        if root.step == 3: PrimaryButton {
+            x: parent.width - self.width;
+            y: 547px;
+            width: 112px;
+            text: "New project";
+            clicked => { root.finish("project"); }
+        }
+    }
+}
