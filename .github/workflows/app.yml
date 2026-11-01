@@ -24,7 +24,7 @@ jobs:
       - name: Install libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev xvfb
+          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -47,6 +47,7 @@ jobs:
         run: |
           mkdir OriginFX-linux
           cp target/release/originfx assets/originfx.png assets/originfx.desktop OriginFX-linux/
+          cp assets/README-linux.txt OriginFX-linux/README.txt
           tar -czf OriginFX-0.1.0-linux-x86_64.tar.gz OriginFX-linux
       - uses: actions/upload-artifact@v4
         with:
