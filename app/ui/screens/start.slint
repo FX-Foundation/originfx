@@ -1,0 +1,558 @@
+// Section A: Home, Projects, New project, Learn, Library, Project settings.
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen, RecentProject, LessonItem, LibraryItem } from "../store.slint";
+import { Brand, Icon, PrimaryButton, GhostButton, Segmented, SegItem, SettingRow, SummaryRow, NavSidebar, TextField, SectionLabel, Chip, Tile, Card, ProgressBar, Placeholder, ToolTopBar, Divider, PageTitle, Hint } from "../components.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component ProjectCard inherits Rectangle {
+    in property <RecentProject> p;
+    callback clicked;
+    height: 150px;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: ta.has-hover ? Theme.accent : Theme.border;
+    Rectangle {
+        x: 1px; y: 1px; width: parent.width - 2px; height: 104px;
+        background: Theme.well;
+        clip: true;
+        if root.p.has-thumb: Image { width: parent.width; height: parent.height; source: root.p.thumb; image-fit: cover; }
+        if !root.p.has-thumb: Icon { width: 18px; height: 18px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+    }
+    Text { x: 10px; y: 115px; width: parent.width - 70px; overflow: elide; text: root.p.name; color: Theme.text; font-size: 12px; font-weight: 500; }
+    Text { x: 10px; y: 131px; text: root.p.edited; color: Theme.muted; font-size: 10.5px; }
+    Chip { x: parent.width - self.width - 10px; y: 120px; text: root.p.aspect; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component ActionCard inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> sub;
+    in property <bool> primary: false;
+    callback clicked;
+    height: 72px;
+    background: primary ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.card-bg);
+    border-width: primary ? 0px : 1px;
+    border-color: Theme.border;
+    Icon { x: 20px; width: 16px; height: 16px; source: root.icon; tint: root.primary ? Theme.on-accent : Theme.text; }
+    Text { x: 46px; y: 20px; text: root.title; color: root.primary ? Theme.on-accent : Theme.text; font-size: 13px; font-weight: 500; }
+    Text { x: 46px; y: 38px; text: root.sub; color: root.primary ? Theme.on-accent.with-alpha(0.85) : Theme.muted; font-size: 11px; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component HomeScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <int> page: Model.home-page;   // 0 home, 1 projects
+    NavSidebar {
+        x: 0px; y: 0px; height: parent.height;
+        current: root.page == 1 ? 1 : 0;
+        status: Model.status;
+        navigate(i) => {
+            if (i == 0) { Model.home-page = 0; }
+            if (i == 1) { Model.home-page = 1; }
+            if (i == 2) { Backend.go(Screen.learn); }
+            if (i == 3) { Backend.go(Screen.library); }
+            if (i == 4) { Backend.go(Screen.settings); }
+        }
+        mode-changed(m) => { Backend.set-mode(m); }
+    }
+    ScrollView {
+        x: 196px; y: 0px; width: parent.width - 196px; height: parent.height;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 30px; alignment: start;
+            spacing: 0px;
+            HorizontalLayout {
+                PageTitle { title: root.page == 0 ? "Welcome back" : "Projects"; sub: root.page == 0 ? "Pick up where you left off, or start something new." : "Everything in " + Model.projects-folder + "."; }
+                Rectangle { }
+                TextField { width: 240px; height: 32px; placeholder: "Search your projects"; has-icon: true; icon: @image-url("../icons/search.svg"); edited(t) => { Backend.search-projects(t); } }
+            }
+            Rectangle { height: 26px; }
+            HorizontalLayout {
+                spacing: 12px;
+                ActionCard { icon: @image-url("../icons/plus.svg"); title: "New project"; sub: "Start from a template"; primary: true; clicked => { Backend.go(Screen.new-project); } }
+                ActionCard { icon: @image-url("../icons/folder.svg"); title: "Open project"; sub: "Find one on your computer"; clicked => { Backend.open-project-dialog(); } }
+                ActionCard { icon: @image-url("../icons/upload.svg"); title: "Import footage"; sub: "Drop clips to begin"; clicked => { Backend.import-footage-dialog(); } }
+            }
+            Rectangle { height: 26px; }
+            HorizontalLayout {
+                Text { text: root.page == 0 ? "Recent projects" : "All projects"; color: Theme.text; font-size: 13px; font-weight: 500; }
+                Rectangle { }
+                if root.page == 0: Rectangle {
+                    width: 44px; height: 18px;
+                    Text { text: "See all"; color: Theme.accent; font-size: 11.5px; horizontal-alignment: right; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Model.home-page = 1; } }
+                }
+            }
+            Rectangle { height: 14px; }
+            if Model.recent.length == 0: Rectangle {
+                height: 120px;
+                border-width: 1px; border-color: Theme.border;
+                Text { text: "No projects yet. Start one, and it shows up here."; color: Theme.muted; font-size: 12.5px; }
+            }
+            // grid, 3 per row
+            property <int> cols: 3;
+            property <length> gap: 14px;
+            property <length> cw: (self.width - 60px - (cols - 1) * gap) / cols;
+            property <int> count: root.page == 0 ? min(Model.recent.length, 6) : Model.recent.length;
+            Rectangle {
+                height: count == 0 ? 0px : ceil(count / cols) * 164px;
+                for p[i] in Model.recent: ProjectCard {
+                    visible: i < count;
+                    x: mod(i, cols) * (cw + gap);
+                    y: floor(i / cols) * 164px;
+                    width: cw;
+                    p: p;
+                    clicked => { Backend.open-recent(p.path); }
+                }
+            }
+        }
+    }
+}
+
+component TemplateCard inherits Rectangle {
+    in property <string> title;
+    in property <string> sub;
+    in property <string> lanes;
+    in property <string> shape;
+    in property <bool> selected: false;
+    in property <float> ratio: 1.777;   // w/h of the preview box
+    in property <bool> blank: false;
+    callback clicked;
+    height: 186px;
+    background: Theme.card-bg;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? Theme.accent : Theme.border;
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 26px;
+        height: 60px;
+        width: ratio >= 1 ? 60px * ratio : 60px * ratio;
+        border-width: 1px;
+        border-color: Theme.button-border;
+        background: Theme.well;
+        if root.blank: Icon { width: 12px; height: 12px; source: @image-url("../icons/plus.svg"); tint: Theme.muted; }
+    }
+    if root.selected: Rectangle {
+        x: parent.width - 24px; y: 8px; width: 16px; height: 16px; border-radius: 2px; background: Theme.accent;
+        Icon { source: @image-url("../icons/check.svg"); tint: Theme.on-accent; width: 11px; height: 11px; }
+    }
+    Text { x: 12px; y: 124px; text: root.title; color: Theme.text; font-size: 12.5px; font-weight: 500; }
+    Text { x: parent.width - self.width - 12px; y: 126px; text: root.shape; color: Theme.muted; font-size: 10.5px; }
+    Text { x: 12px; y: 142px; text: root.sub; color: Theme.text-2; font-size: 11px; }
+    Text { x: 12px; y: 160px; text: root.lanes; color: Theme.muted; font-size: 10.5px; }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component NewProjectScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <int> template: 1;
+    property <string> name: "Untitled project";
+    property <string> folder: Model.projects-folder;
+    property <string> picked;
+    property <bool> custom: false;
+    property <int> res: 1;
+    property <int> fps: 1;
+    property <int> aspect: 0;
+    property <[string]> pic: ["1280 × 720 (HD)", "1920 × 1080 (Full HD)", "3840 × 2160 (4K)"];
+    property <[string]> fpsn: ["24", "30", "60"];
+    property <[string]> shapes: ["16:9 landscape", "9:16 portrait", "1:1 square", "21:9 cinema"];
+    function pick(t: int) {
+        root.template = t;
+        if (t == 0) { root.aspect = 0; root.fps = 1; root.res = 1; }
+        if (t == 1) { root.aspect = 0; root.fps = 1; root.res = 1; }
+        if (t == 2) { root.aspect = 1; root.fps = 1; root.res = 1; }
+        if (t == 3) { root.aspect = 3; root.fps = 0; root.res = 1; }
+        if (t == 4) { root.aspect = 0; root.fps = 0; root.res = 1; }
+        if (t == 5) { root.aspect = 2; root.fps = 1; root.res = 1; }
+    }
+    // top bar
+    Rectangle {
+        x: 0px; y: 0px; height: 44px; width: parent.width; background: Theme.panel-bg;
+        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border; }
+        HorizontalLayout {
+            x: 16px; height: parent.height; spacing: 6px; alignment: start;
+            Rectangle {
+                width: 68px;
+                Icon { x: 0px; width: 12px; height: 12px; source: @image-url("../icons/chevron-left.svg"); tint: Theme.muted; }
+                Text { x: 18px; height: parent.height; vertical-alignment: center; text: "Home"; color: Theme.muted; font-size: 12px; }
+                TouchArea { mouse-cursor: pointer; clicked => { Backend.go(Screen.home); } }
+            }
+            Text { height: parent.height; vertical-alignment: center; text: "New project"; color: Theme.text; font-size: 12px; }
+        }
+        Brand { x: (parent.width - self.width) / 2; y: 12px; small: true; }
+    }
+    // left
+    ScrollView {
+        x: 0px; y: 44px; width: parent.width - 304px; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; alignment: start;
+            PageTitle { title: "Start a new project"; sub: "Pick a starting point. It sets up the right size and the right lanes for you."; }
+            Rectangle { height: 24px; }
+            property <length> gap: 12px;
+            property <length> cw: (self.width - 64px - 2 * gap) / 3;
+            Rectangle {
+                height: 186px * 2 + gap;
+                TemplateCard { x: 0px; y: 0px; width: cw; title: "Blank project"; shape: "Any size"; sub: "Start empty. Add what you want."; lanes: "Comes with: nothing, you build it"; blank: true; selected: root.template == 0; clicked => { root.pick(0); } }
+                TemplateCard { x: cw + gap; y: 0px; width: cw; title: "YouTube video"; shape: "16:9"; sub: "Landscape video for the web."; lanes: "Comes with: video, title, and music lanes"; selected: root.template == 1; clicked => { root.pick(1); } }
+                TemplateCard { x: 2 * (cw + gap); y: 0px; width: cw; title: "Reel or Short"; shape: "9:16"; sub: "Tall video for phones."; lanes: "Comes with: video, title, and music lanes"; ratio: 0.5625; selected: root.template == 2; clicked => { root.pick(2); } }
+                TemplateCard { x: 0px; y: 186px + gap; width: cw; title: "Short film"; shape: "2.39:1"; sub: "Wide cinema frame."; lanes: "Comes with: video, sound, and music lanes"; ratio: 2.39; selected: root.template == 3; clicked => { root.pick(3); } }
+                TemplateCard { x: cw + gap; y: 186px + gap; width: cw; title: "Documentary"; shape: "16:9"; sub: "Interviews and cutaways."; lanes: "Comes with: interview, cutaway, and voice lanes"; selected: root.template == 4; clicked => { root.pick(4); } }
+                TemplateCard { x: 2 * (cw + gap); y: 186px + gap; width: cw; title: "Square post"; shape: "1:1"; sub: "Fits any feed."; lanes: "Comes with: video, title, and music lanes"; ratio: 1; selected: root.template == 5; clicked => { root.pick(5); } }
+            }
+        }
+    }
+    // right panel
+    Rectangle {
+        x: parent.width - 284px; y: 68px; width: 254px; height: root.custom ? 440px : 300px;
+        background: Theme.card-bg; border-width: 1px; border-color: Theme.border;
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            SectionLabel { text: "Project name"; }
+            TextField { text <=> root.name; placeholder: "Untitled project"; }
+            Rectangle { height: 6px; }
+            SectionLabel { text: "Saved to"; }
+            Rectangle {
+                height: 34px; border-width: 1px; border-color: Theme.control-border; background: Theme.input-bg; border-radius: 2px;
+                Icon { x: 10px; width: 13px; height: 13px; source: @image-url("../icons/folder.svg"); tint: Theme.muted; }
+                Text { x: 30px; width: parent.width - 40px; height: parent.height; vertical-alignment: center; overflow: elide; text: root.folder; color: Theme.text; font-size: 12px; }
+                TouchArea { mouse-cursor: pointer; clicked => { root.picked = Backend.browse-folder("projects"); if (root.picked != "") { root.folder = root.picked; } } }
+            }
+            Rectangle { height: 10px; }
+            HorizontalLayout {
+                Text { text: "Set up automatically"; color: Theme.muted; font-size: 11px; vertical-alignment: center; }
+                Rectangle { }
+                Chip { text: root.custom ? "Custom" : "Auto"; kind: root.custom ? 0 : 5; }
+            }
+            if !root.custom: VerticalLayout {
+                spacing: 0px;
+                SummaryRow { pad: 0px; row-h: 26px; label: "Picture size"; value: root.pic[root.res]; last: true; }
+                SummaryRow { pad: 0px; row-h: 26px; label: "Smoothness"; value: root.fpsn[root.fps] + " frames per second"; last: true; }
+                SummaryRow { pad: 0px; row-h: 26px; label: "Shape"; value: root.shapes[root.aspect]; last: true; }
+                Rectangle {
+                    height: 24px;
+                    Text { text: "Change settings"; color: Theme.accent; font-size: 12px; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.custom = true; } }
+                }
+            }
+            if root.custom: VerticalLayout {
+                spacing: 10px;
+                SectionLabel { text: "Picture size"; }
+                Segmented { small: true; items: ["720p", "1080p", "4K"]; current <=> root.res; }
+                SectionLabel { text: "Frames per second"; }
+                Segmented { small: true; items: root.fpsn; current <=> root.fps; }
+                SectionLabel { text: "Shape"; }
+                Segmented { small: true; items: ["16:9", "9:16", "1:1", "21:9"]; current <=> root.aspect; }
+                Rectangle {
+                    height: 24px;
+                    Text { text: "Set up automatically"; color: Theme.accent; font-size: 12px; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.custom = false; root.pick(root.template); } }
+                }
+            }
+        }
+    }
+    PrimaryButton {
+        x: parent.width - 284px; y: root.custom ? 504px : 354px; width: 254px;
+        text: "Create project"; arrow: true;
+        clicked => { Backend.new-project(root.name, root.folder, root.template * 100 + root.res * 10 + root.fps + root.aspect * 1000); }
+    }
+    GhostButton {
+        x: parent.width - 284px; y: root.custom ? 556px : 406px; width: 254px; bordered: false; text: "Cancel";
+        clicked => { Backend.go(Screen.home); }
+    }
+}
+
+export component LearnScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> level-names: ["Basics", "Cutting", "Sound", "Look and color", "Titles and motion", "Pro tricks"];
+    property <[int]> level-count: [3, 4, 4, 5, 4, 6];
+    property <int> level: Model.current-lesson < 3 ? 0 : Model.current-lesson < 7 ? 1 : Model.current-lesson < 11 ? 2 : Model.current-lesson < 16 ? 3 : Model.current-lesson < 20 ? 4 : 5;
+    property <LessonItem> lesson: Model.lessons[Model.current-lesson];
+    NavSidebar {
+        x: 0px; y: 0px; height: parent.height; current: 2; status: Model.status;
+        navigate(i) => {
+            if (i == 0) { Model.home-page = 0; Backend.go(Screen.home); }
+            if (i == 1) { Model.home-page = 1; Backend.go(Screen.home); }
+            if (i == 3) { Backend.go(Screen.library); }
+            if (i == 4) { Backend.go(Screen.settings); }
+        }
+        mode-changed(m) => { Backend.set-mode(m); }
+    }
+    ScrollView {
+        x: 196px; y: 0px; width: parent.width - 196px; height: parent.height;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 30px; alignment: start;
+            HorizontalLayout {
+                PageTitle { title: "Learn by doing"; sub: "Every lesson runs inside the real editor. You edit, and we point the way."; }
+                Rectangle { }
+                VerticalLayout {
+                    width: 200px; spacing: 6px; alignment: end;
+                    HorizontalLayout {
+                        Text { text: "Your progress"; color: Theme.muted; font-size: 11px; }
+                        Rectangle { }
+                        Text { text: Model.lessons-done + " of " + Model.lessons.length + " lessons"; color: Theme.muted; font-size: 11px; }
+                    }
+                    ProgressBar { value: Model.lessons.length > 0 ? Model.lessons-done / Model.lessons.length : 0; }
+                }
+            }
+            Rectangle { height: 22px; }
+            HorizontalLayout {
+                spacing: 20px;
+                VerticalLayout {
+                    width: 224px; spacing: 0px;
+                    SectionLabel { text: "Your path"; }
+                    Rectangle { height: 8px; }
+                    for name[i] in root.level-names: Rectangle {
+                        height: 46px;
+                        background: root.level == i ? Theme.selected-row : (lta.has-hover ? Theme.hover : transparent);
+                        border-width: root.level == i ? 1px : 0px;
+                        border-color: Theme.accent;
+                        Rectangle {
+                            x: 10px; width: 22px; height: 22px; border-radius: 2px;
+                            background: i < root.level ? Theme.accent : transparent;
+                            border-width: 1px; border-color: i <= root.level ? Theme.accent : Theme.border;
+                            if i < root.level: Icon { source: @image-url("../icons/check.svg"); tint: Theme.on-accent; width: 12px; height: 12px; }
+                            if i >= root.level: Text { text: i + 1; color: Theme.text; font-size: 11px; }
+                        }
+                        Text { x: 42px; y: 8px; text: name; color: Theme.text; font-size: 12.5px; font-weight: 500; }
+                        Text { x: 42px; y: 25px; text: root.level-count[i] + " lessons"; color: Theme.muted; font-size: 10.5px; }
+                        lta := TouchArea { mouse-cursor: pointer; clicked => { Model.current-lesson = i == 0 ? 0 : i == 1 ? 3 : i == 2 ? 7 : i == 3 ? 11 : i == 4 ? 16 : 20; } }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 0px;
+                    Card {
+                        height: 220px;
+                        Rectangle {
+                            x: 16px; y: 16px; width: parent.width * 0.48; height: 188px; background: Theme.well; border-width: 1px; border-color: Theme.border;
+                            Icon { width: 18px; height: 18px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+                            Rectangle {
+                                x: 16px; y: parent.height - 44px; height: 28px; width: t.preferred-width + 20px; background: Theme.accent; border-radius: 2px;
+                                t := Text { text: root.lesson.sub; color: Theme.on-accent; font-size: 11px; vertical-alignment: center; horizontal-alignment: center; }
+                            }
+                        }
+                        VerticalLayout {
+                            x: parent.width * 0.48 + 34px; y: 40px; width: parent.width * 0.52 - 50px; spacing: 10px; alignment: start;
+                            Rectangle {
+                                height: 20px; width: parent.width; border-width: 1px; border-color: Theme.accent; background: Theme.badge-bg;
+                                Text { x: 8px; height: parent.height; vertical-alignment: center; text: "Level " + (root.level + 1) + ": " + root.level-names[root.level]; color: Theme.text; font-size: 10.5px; }
+                            }
+                            Text { text: "Lesson " + (Model.current-lesson + 1) + ": " + root.lesson.title; color: Theme.text; font-size: 18px; font-weight: 500; }
+                            Text { text: root.lesson.sub; color: Theme.text-2; font-size: 12px; wrap: word-wrap; }
+                            HorizontalLayout {
+                                spacing: 10px; alignment: start;
+                                PrimaryButton { small: true; text: root.lesson.done ? "Do it again" : "Start lesson"; has-icon: true; icon: @image-url("../icons/play.svg"); clicked => { Backend.start-lesson(Model.current-lesson); } }
+                                GhostButton { small: true; text: "Next lesson"; clicked => { Model.current-lesson = min(Model.current-lesson + 1, Model.lessons.length - 1); } }
+                            }
+                        }
+                    }
+                    Rectangle { height: 22px; }
+                    HorizontalLayout {
+                        Text { text: "Quick tricks"; color: Theme.text; font-size: 13px; font-weight: 500; }
+                        Rectangle { }
+                        Text { text: "2 minutes each"; color: Theme.muted; font-size: 11px; }
+                    }
+                    Rectangle { height: 12px; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        for q[i] in [
+                            { t: "Split a clip in two", s: "Press K at the playhead.", c: 0 },
+                            { t: "Add a title", s: "Lower third or centered, animated.", c: 1 },
+                            { t: "Smooth a cut", s: "A dissolve between two clips.", c: 2 },
+                            { t: "Export for YouTube", s: "1080p MP4 in one click.", c: 3 }
+                        ]: Card {
+                            height: 106px;
+                            Rectangle {
+                                x: 12px; y: 12px; width: 30px; height: 30px; border-width: 1px;
+                                border-color: q.c == 0 ? Theme.success : q.c == 1 ? Theme.gold : q.c == 2 ? Theme.clip-overlay-border : Theme.accent;
+                                background: q.c == 0 ? Theme.tint-music : q.c == 1 ? Theme.tint-title : q.c == 2 ? Theme.tint-transition : Theme.tint-overlay;
+                                Icon { width: 13px; height: 13px; tint: Theme.text; source: q.c == 0 ? @image-url("../icons/scissors.svg") : q.c == 1 ? @image-url("../icons/type.svg") : q.c == 2 ? @image-url("../icons/wand.svg") : @image-url("../icons/upload.svg"); }
+                            }
+                            Text { x: 12px; y: 54px; text: q.t; color: Theme.text; font-size: 12px; font-weight: 500; }
+                            Text { x: 12px; y: 72px; width: parent.width - 24px; wrap: word-wrap; text: q.s; color: Theme.muted; font-size: 10.5px; }
+                            TouchArea { mouse-cursor: pointer; clicked => { Backend.start-lesson(100 + i); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component LibraryScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> cats: ["All", "Titles", "Transitions", "Effects", "Music", "Sound effects", "Overlays", "Templates"];
+    property <LibraryItem> pick: Model.library[Model.library-pick];
+    function tint(k: int) -> color {
+        return k == 1 ? Theme.tint-title : k == 2 ? Theme.tint-transition : k == 3 ? Theme.tint-effect : k == 4 ? Theme.tint-music : k == 5 ? Theme.tint-sfx : k == 6 ? Theme.tint-overlay : Theme.tint-title;
+    }
+    function icon(k: int) -> image {
+        return k == 1 || k == 7 ? @image-url("../icons/type.svg") : k == 2 || k == 3 ? @image-url("../icons/wand.svg") : k == 4 ? @image-url("../icons/music.svg") : k == 5 ? @image-url("../icons/volume.svg") : @image-url("../icons/film.svg");
+    }
+    NavSidebar {
+        x: 0px; y: 0px; height: parent.height; current: 3; status: Model.status;
+        navigate(i) => {
+            if (i == 0) { Model.home-page = 0; Backend.go(Screen.home); }
+            if (i == 1) { Model.home-page = 1; Backend.go(Screen.home); }
+            if (i == 2) { Backend.go(Screen.learn); }
+            if (i == 4) { Backend.go(Screen.settings); }
+        }
+        mode-changed(m) => { Backend.set-mode(m); }
+    }
+    ScrollView {
+        x: 196px; y: 0px; width: parent.width - 196px - 230px; height: parent.height;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 30px; alignment: start;
+            HorizontalLayout {
+                PageTitle { title: "Library"; sub: "Titles, transitions, effects, and sounds."; }
+                Rectangle { }
+                TextField { width: 210px; height: 32px; placeholder: "Search the library"; has-icon: true; icon: @image-url("../icons/search.svg"); text <=> Model.library-filter; edited(t) => { Backend.library-filter(t); } }
+            }
+            Rectangle { height: 18px; }
+            HorizontalLayout {
+                spacing: 6px; alignment: start;
+                for c[i] in root.cats: Rectangle {
+                    height: 24px; width: ct.preferred-width + (i == 0 ? 20px : 30px);
+                    border-width: 1px; border-color: Model.library-cat == i ? Theme.accent : Theme.border;
+                    background: Model.library-cat == i ? Theme.accent : Theme.card-bg;
+                    if i > 0: Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: i == 1 ? Theme.gold : i == 2 || i == 3 ? Theme.clip-overlay-border : i == 4 || i == 5 ? Theme.success : Theme.accent; }
+                    ct := Text { x: i == 0 ? 10px : 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == i ? Theme.on-accent : Theme.text; font-size: 11px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = i; Backend.library-filter(Model.library-filter); } }
+                }
+            }
+            Rectangle { height: 16px; }
+            property <int> cols: 4;
+            property <length> gap: 10px;
+            property <length> cw: (self.width - 60px - (cols - 1) * gap) / cols;
+            Rectangle {
+                height: Model.library.length == 0 ? 80px : ceil(Model.library.length / cols) * 118px;
+                if Model.library.length == 0: Text { x: 0px; y: 10px; text: "Nothing here yet. Music, sound effects and overlays come from " + Model.projects-folder + "/Library."; color: Theme.muted; font-size: 12px; }
+                for it[i] in Model.library: Tile {
+                    x: mod(i, cols) * (cw + gap);
+                    y: floor(i / cols) * 118px;
+                    width: cw;
+                    thumb-h: 72px;
+                    name: it.name;
+                    sub: it.kind-text;
+                    tint: root.tint(it.kind);
+                    icon: root.icon(it.kind);
+                    selected: Model.library-pick == i;
+                    clicked => { Model.library-pick = i; Backend.library-select(i); }
+                    double-clicked => { Backend.library-add(i); }
+                }
+            }
+        }
+    }
+    // right detail
+    Rectangle {
+        x: parent.width - 230px; y: 0px; width: 230px; height: parent.height; background: Theme.panel-bg;
+        Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.border; }
+        if Model.library.length > 0: VerticalLayout {
+            x: 20px; y: 20px; width: parent.width - 40px; spacing: 10px; alignment: start;
+            Rectangle {
+                height: 110px; background: root.tint(root.pick.kind);
+                Icon { width: 20px; height: 20px; source: root.icon(root.pick.kind); tint: Theme.text; opacity: 0.8; }
+            }
+            Text { text: root.pick.name; color: Theme.text; font-size: 15px; font-weight: 500; }
+            HorizontalLayout { alignment: start; Chip { text: root.pick.kind-text; kind: 4; } }
+            Text { text: root.pick.desc; color: Theme.text-2; font-size: 11.5px; wrap: word-wrap; }
+            Rectangle { height: 8px; }
+            SummaryRow { pad: 0px; row-h: 26px; label: "Length"; value: root.pick.length; last: true; }
+            SummaryRow { pad: 0px; row-h: 26px; label: "Works on"; value: root.pick.works-on; last: true; }
+            SummaryRow { pad: 0px; row-h: 26px; label: "Looks like"; value: root.pick.looks-like; last: true; }
+        }
+        PrimaryButton { x: 20px; y: parent.height - 92px; width: parent.width - 40px; text: "Add to project"; has-icon: true; icon: @image-url("../icons/plus.svg"); enabled: Model.library.length > 0; clicked => { Backend.library-add(Model.library-pick); } }
+        GhostButton { x: 20px; y: parent.height - 46px; width: parent.width - 40px; text: root.pick.favorite ? "Saved to favorites" : "Save to favorites"; has-icon: true; icon: @image-url("../icons/star.svg"); enabled: Model.library.length > 0; clicked => { Backend.library-favorite(Model.library-pick); } }
+    }
+}
+
+export component ProjectSettingsScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <int> page: 1;
+    property <int> res: Model.seq-height >= 2160 ? 2 : Model.seq-height >= 1080 ? 1 : 0;
+    property <int> fps: Model.fps >= 59 ? 2 : Model.fps >= 29 ? 1 : 0;
+    property <int> aspect: Model.aspect;
+    property <int> colour: Model.colour-space;
+    property <int> w: root.aspect == 1 ? (root.res == 2 ? 2160 : root.res == 1 ? 1080 : 720) : root.aspect == 2 ? (root.res == 2 ? 2160 : root.res == 1 ? 1080 : 720) : (root.res == 2 ? 3840 : root.res == 1 ? 1920 : 1280);
+    property <int> h: root.aspect == 1 ? (root.res == 2 ? 3840 : root.res == 1 ? 1920 : 1280) : root.aspect == 2 ? (root.res == 2 ? 2160 : root.res == 1 ? 1080 : 720) : root.aspect == 3 ? (root.res == 2 ? 1608 : root.res == 1 ? 804 : 536) : (root.res == 2 ? 2160 : root.res == 1 ? 1080 : 720);
+    property <float> f: root.fps == 2 ? 60 : root.fps == 1 ? 30 : 24;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    Rectangle {
+        x: 0px; y: 44px; width: 180px; height: parent.height - 44px; background: Theme.panel-bg;
+        Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+        VerticalLayout {
+            x: 12px; y: 20px; width: parent.width - 24px; spacing: 2px; alignment: start;
+            for name[i] in ["General", "Picture", "Sound", "Color", "Speed and storage"]: Rectangle {
+                height: 30px; border-radius: 2px;
+                background: root.page == i ? Theme.selected-row : (nta.has-hover ? Theme.hover : transparent);
+                Icon { x: 10px; width: 13px; height: 13px; tint: root.page == i ? Theme.accent : Theme.muted; source: i == 0 ? @image-url("../icons/sliders-h.svg") : i == 1 ? @image-url("../icons/image.svg") : i == 2 ? @image-url("../icons/volume.svg") : i == 3 ? @image-url("../icons/palette.svg") : @image-url("../icons/gauge.svg"); }
+                Text { x: 31px; height: parent.height; vertical-alignment: center; text: name; color: Theme.text; font-size: 12.5px; }
+                nta := TouchArea { mouse-cursor: pointer; clicked => { root.page = i; } }
+            }
+        }
+    }
+    ScrollView {
+        x: 180px; y: 44px; width: parent.width - 180px - 300px; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; alignment: start;
+            if root.page == 1: VerticalLayout {
+                PageTitle { title: "Video"; sub: "Output settings for this project. The defaults suit most workflows."; }
+                Rectangle { height: 16px; }
+                SettingRow { label: "Resolution"; hint: "Output dimensions."; Segmented { x: parent.width - self.width; y: 20px; small: true; items: ["720p", "1080p", "4K"]; current <=> root.res; } }
+                SettingRow { label: "Frame rate"; hint: "Frames per second."; Segmented { x: parent.width - self.width; y: 20px; small: true; items: ["24", "30", "60"]; current <=> root.fps; } }
+                SettingRow { label: "Aspect ratio"; hint: "Frame proportions."; Segmented { x: parent.width - self.width; y: 20px; small: true; items: ["16:9", "9:16", "1:1", "21:9"]; current <=> root.aspect; } }
+                SettingRow { label: "Color space"; hint: "Standard (SDR) is compatible with all displays. HDR output is not in this version."; Segmented { x: parent.width - self.width; y: 20px; small: true; items: ["Standard", "HDR", "Cinema"]; current: 0; enabled: false; } }
+            }
+            if root.page == 0: VerticalLayout {
+                PageTitle { title: "General"; sub: "Name and location."; }
+                Rectangle { height: 16px; }
+                SettingRow { label: "Project name"; hint: ""; Text { x: parent.width - self.width; height: parent.height; vertical-alignment: center; text: Model.project-name; color: Theme.text; font-size: 12.5px; } }
+                SettingRow { label: "Project file"; hint: ""; Text { x: parent.width - self.width; width: min(self.preferred-width, parent.width * 0.6); height: parent.height; vertical-alignment: center; overflow: elide; text: Model.project-path; color: Theme.text; font-size: 12.5px; } }
+                SettingRow { label: "Length"; hint: ""; Text { x: parent.width - self.width; height: parent.height; vertical-alignment: center; text: Model.duration-text; color: Theme.text; font-size: 12.5px; } }
+            }
+            if root.page == 2: VerticalLayout {
+                PageTitle { title: "Sound"; sub: "Mix settings for this project."; }
+                Rectangle { height: 16px; }
+                SettingRow { label: "Sample rate"; hint: "48 kHz, the broadcast and web standard."; Text { x: parent.width - self.width; height: parent.height; vertical-alignment: center; text: "48 kHz"; color: Theme.text; font-size: 12.5px; } }
+                SettingRow { label: "Master level"; hint: "Applied after every track."; Text { x: parent.width - self.width; height: parent.height; vertical-alignment: center; text: Math.round(Model.master-gain * 10) / 10 + " dB"; color: Theme.text; font-size: 12.5px; } }
+            }
+            if root.page == 3: VerticalLayout {
+                PageTitle { title: "Color"; sub: "Working colour space."; }
+                Rectangle { height: 16px; }
+                SettingRow { label: "Working space"; hint: "Rec. 709, 8-bit."; Text { x: parent.width - self.width; height: parent.height; vertical-alignment: center; text: "Rec. 709"; color: Theme.text; font-size: 12.5px; } }
+            }
+            if root.page == 4: VerticalLayout {
+                PageTitle { title: "Speed and storage"; sub: "Proxies and cache for this project."; }
+                Rectangle { height: 16px; }
+                SettingRow { label: "Proxies and cache"; hint: "Lightweight copies keep editing smooth."; GhostButton { x: parent.width - self.width; y: 20px; small: true; text: "Open"; clicked => { Backend.open-tool(Screen.proxy); } } }
+            }
+        }
+    }
+    // right summary
+    Rectangle {
+        x: parent.width - 300px; y: 44px; width: 300px; height: parent.height - 44px; background: Theme.panel-bg;
+        Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.border; }
+        Card {
+            x: 20px; y: 24px; width: parent.width - 40px; height: 230px;
+            SectionLabel { x: 16px; y: 14px; text: "Output summary"; }
+            Rectangle {
+                x: (parent.width - self.width) / 2; y: 40px;
+                width: root.aspect == 1 ? 50px : root.aspect == 2 ? 80px : root.aspect == 3 ? 150px : 128px;
+                height: root.aspect == 1 ? 90px : root.aspect == 2 ? 80px : root.aspect == 3 ? 64px : 72px;
+                border-width: 1px; border-color: Theme.button-border; background: Theme.well;
+                Icon { width: 14px; height: 14px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+            }
+            Text { x: 16px; y: 146px; text: root.w + " × " + root.h + " · " + root.f + " fps"; color: Theme.text; font-size: 12.5px; font-weight: 500; }
+            Text { x: 16px; y: 166px; width: parent.width - 32px; wrap: word-wrap; text: root.aspect == 1 ? "Suited to Reels, Shorts and TikTok." : root.aspect == 2 ? "Suited to square feeds." : root.aspect == 3 ? "Wide cinema frame." : "Suited to YouTube, web, and most displays. Balanced file size."; color: Theme.muted; font-size: 11px; }
+            Chip { x: 16px; y: 204px; text: "Recommended"; kind: 5; }
+        }
+        PrimaryButton { x: 20px; y: parent.height - 112px; width: parent.width - 40px; text: "Apply"; has-icon: true; icon: @image-url("../icons/check.svg"); clicked => { Backend.set-sequence(root.w, root.h, root.f, root.aspect); } }
+        GhostButton { x: 20px; y: parent.height - 66px; width: parent.width - 40px; text: "Restore defaults"; clicked => { root.res = 1; root.fps = 1; root.aspect = 0; } }
+        GhostButton { x: 20px; y: parent.height - 26px; height: 22px; width: parent.width - 40px; text: "Cancel"; bordered: false; clicked => { Backend.back(); } }
+    }
+}

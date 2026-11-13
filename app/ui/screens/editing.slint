@@ -1,0 +1,217 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen } from "../store.slint";
+import { ToolTopBar, PageTitle, PrimaryButton, GhostButton, IconButton, Segmented, SettingRow, SummaryRow, SectionLabel, Toggle, CheckRow, HSlider, Chip, Icon, Dropdown, Tile, TabBar } from "../components.slint";
+
+component Panel inherits Rectangle {
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+component MiniPreview inherits Rectangle {
+    background: #000000;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    if Model.has-preview: Image { source: Model.preview; image-fit: contain; width: parent.width; height: parent.height; }
+    if !Model.has-preview: Icon { width: 20px; height: 20px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+}
+
+component PlayBar inherits Rectangle {
+    height: 34px;
+    HorizontalLayout {
+        spacing: 8px;
+        IconButton { icon: @image-url("../icons/skip-back.svg"); hint: "Start"; clicked => { Backend.go-start(); } }
+        IconButton { icon: Model.playing ? @image-url("../icons/pause.svg") : @image-url("../icons/play.svg"); hint: "Play"; clicked => { Backend.play-pause(); } }
+        Text { vertical-alignment: center; text: Model.playhead-text; color: Theme.text-2; font-size: 12px; }
+    }
+}
+
+component NeedClip inherits Rectangle {
+    Text { text: "Pick a clip on the timeline first."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+// ---------------------------------------------------------------- Trim
+export component TrimScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> modes: ["Ripple", "Roll", "Slip", "Slide"];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    if !Model.selected.valid: NeedClip { x: 0px; y: 44px; width: parent.width; height: parent.height - 44px; }
+    if Model.selected.valid: VerticalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        padding: 32px; spacing: 16px;
+        HorizontalLayout {
+            PageTitle { title: "Fine trim"; sub: "Adjust the cut point one frame at a time."; }
+            Rectangle { }
+            Segmented { items: root.modes; current: Model.trim-mode; changed(i) => { Model.trim-mode = i; } }
+        }
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: Model.selected.has-prev ? "Outgoing · " + Model.selected.prev-name : "Outgoing"; color: Theme.muted; font-size: 12px; }
+                Rectangle {
+                    background: #000000; border-width: 1px; border-color: Theme.border; clip: true; vertical-stretch: 1;
+                    if Model.has-trim-out: Image { source: Model.trim-out-img; image-fit: contain; width: parent.width; height: parent.height; }
+                    if !Model.has-trim-out: Text { text: "No picture"; color: Theme.faint; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: "Incoming · " + Model.selected.name; color: Theme.muted; font-size: 12px; }
+                Rectangle {
+                    background: #000000; border-width: 1px; border-color: Theme.border; clip: true; vertical-stretch: 1;
+                    if Model.has-trim-in: Image { source: Model.trim-in-img; image-fit: contain; width: parent.width; height: parent.height; }
+                    if !Model.has-trim-in: Text { text: "No picture"; color: Theme.faint; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px; alignment: center; height: 40px;
+            GhostButton { text: "−10"; clicked => { Backend.trim-nudge(Model.trim-mode, -10); } }
+            GhostButton { text: "−5"; clicked => { Backend.trim-nudge(Model.trim-mode, -5); } }
+            GhostButton { text: "−1 frame"; clicked => { Backend.trim-nudge(Model.trim-mode, -1); } }
+            Text { width: 90px; vertical-alignment: center; horizontal-alignment: center; text: Model.trim-offset + " frames"; color: Theme.text; font-size: 13px; }
+            GhostButton { text: "+1 frame"; clicked => { Backend.trim-nudge(Model.trim-mode, 1); } }
+            GhostButton { text: "+5"; clicked => { Backend.trim-nudge(Model.trim-mode, 5); } }
+            GhostButton { text: "+10"; clicked => { Backend.trim-nudge(Model.trim-mode, 10); } }
+            Rectangle { width: 20px; }
+            GhostButton { text: "Reset"; has-icon: true; icon: @image-url("../icons/undo.svg"); clicked => { Backend.trim-reset(); } }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Multicam
+export component MulticamScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    VerticalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        padding: 32px; spacing: 16px;
+        HorizontalLayout {
+            PageTitle { title: "Multicam"; sub: "Line up several cameras and cut between them."; }
+            Rectangle { }
+            Segmented { items: ["By sound", "By timecode", "By marker"]; current: Model.mc-sync; changed(i) => { Model.mc-sync = i; } }
+            Rectangle { width: 10px; }
+            PrimaryButton { text: "Sync angles"; has-icon: true; icon: @image-url("../icons/refresh.svg"); enabled: Model.mc-angles.length > 1; clicked => { Backend.mc-sync-angles(); } }
+        }
+        if Model.mc-angles.length < 2: Panel {
+            vertical-stretch: 1;
+            Text { text: "Import at least two video clips to use multicam."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        if Model.mc-angles.length >= 2: HorizontalLayout {
+            spacing: 12px; vertical-stretch: 1;
+            for a[i] in Model.mc-angles: Rectangle {
+                border-width: Model.mc-current == i ? 2px : 1px;
+                border-color: Model.mc-current == i ? Theme.accent : Theme.border;
+                background: #000000; clip: true;
+                if i < Model.mc-thumbs.length: Image { source: Model.mc-thumbs[i]; image-fit: contain; width: parent.width; height: parent.height; }
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 26px; background: #00000099; }
+                Text { x: 10px; y: 0px; height: 26px; vertical-alignment: center; text: (i + 1) + "  " + (Model.mc-show-names ? a : ""); color: #ffffff; font-size: 11.5px; width: parent.width - 60px; overflow: elide; }
+                if i < Model.mc-synced.length && Model.mc-synced[i]: Chip { x: parent.width - 60px; y: 3px; text: "Synced"; kind: 1; }
+                TouchArea { mouse-cursor: pointer; clicked => { Backend.mc-select-angle(i); } }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px; height: 36px;
+            PlayBar { }
+            Rectangle { }
+            CheckRow { text: "Use this camera's sound"; checked: Model.mc-switch-audio; toggled(v) => { Model.mc-switch-audio = v; } }
+            CheckRow { text: "Show names"; checked: Model.mc-show-names; toggled(v) => { Model.mc-show-names = v; } }
+            for a[i] in Model.mc-angles: GhostButton { text: "Cut to " + (i + 1); enabled: Model.mc-angles.length > 1; clicked => { Backend.mc-cut(i); } }
+            GhostButton { text: "Flatten"; clicked => { Backend.mc-flatten(); } }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Speed
+export component SpeedScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> presets: ["Speed ramp", "Slow motion", "Fast forward", "Ease in", "Ease out", "Freeze frame", "Reverse"];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    if !Model.selected.valid: NeedClip { x: 0px; y: 44px; width: parent.width; height: parent.height - 44px; }
+    if Model.selected.valid: HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 32px; spacing: 14px;
+            PageTitle { title: "Speed"; sub: Model.selected.name; }
+            MiniPreview { vertical-stretch: 1; }
+            PlayBar { }
+        }
+        Rectangle {
+            width: 340px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            VerticalLayout {
+                x: 22px; y: 22px; width: parent.width - 44px; spacing: 12px; alignment: start;
+                SectionLabel { text: "Speed"; }
+                HSlider { minimum: 10; maximum: 400; value: Model.selected.speed * 100; value-text: Math.round(self.value) + "%"; released => { Backend.set-speed(self.value, Model.selected.reverse); } }
+                CheckRow { text: "Play backwards"; checked: Model.selected.reverse; toggled(v) => { Backend.set-speed(Model.selected.speed * 100, v); } }
+                Rectangle { height: 6px; }
+                SectionLabel { text: "Presets"; }
+                for p[i] in root.presets: GhostButton { text: p; bordered: Model.speed-preset == i; clicked => { Backend.apply-speed-preset(i); } }
+                Rectangle { height: 6px; }
+                SectionLabel { text: "Ramp: start to end, in percent"; }
+                for k in 4: HSlider {
+                    minimum: 10; maximum: 400;
+                    value: k < Model.speed-ramp.length ? Model.speed-ramp[k] : 100;
+                    value-text: Math.round(self.value) + "%";
+                    changed(v) => { Model.speed-ramp[k] = v; }
+                }
+                PrimaryButton { text: "Apply ramp"; clicked => { Backend.apply-speed-ramp(); } }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Transitions
+export component TransitionsScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> cats: ["All", "Dissolve", "Wipe", "Push"];
+    property <[string]> names: ["Cross dissolve", "Dip to black", "Dip to white", "Wipe left", "Wipe right", "Wipe up", "Wipe down", "Push left", "Push right", "Push up", "Push down"];
+    property <[int]> kinds: [0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        ScrollView {
+            content-width: self.width;
+            VerticalLayout {
+                padding: 32px; spacing: 16px; alignment: start;
+                PageTitle { title: "Transitions"; sub: "Pick a clip, choose how it blends in."; }
+                TabBar { items: root.cats; current: Model.transition-cat; changed(i) => { Model.transition-cat = i; } }
+                Rectangle {
+                    property <int> cols: 4;
+                    property <length> gap: 12px;
+                    property <length> cw: (self.width - (cols - 1) * gap) / cols;
+                    height: 4 * 104px;
+                    for n[i] in root.names: Tile {
+                        visible: Model.transition-cat == 0 || root.kinds[i] + 1 == Model.transition-cat;
+                        x: mod(i, cols) * (cw + gap); y: floor(i / cols) * 104px; width: cw;
+                        name: n; sub: i < 3 ? "Dissolve" : i < 7 ? "Wipe" : "Push";
+                        icon: @image-url("../icons/layers.svg");
+                        selected: Model.transition-pick == i;
+                        clicked => { Model.transition-pick = i; }
+                        double-clicked => { Model.transition-pick = i; Backend.apply-transition(false); }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 320px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            VerticalLayout {
+                x: 22px; y: 22px; width: parent.width - 44px; spacing: 12px; alignment: start;
+                Text { text: Model.transition-pick >= 0 && Model.transition-pick < root.names.length ? root.names[Model.transition-pick] : "None"; color: Theme.text; font-size: 17px; font-weight: 500; }
+                Text { text: Model.selected.valid ? "Goes into: " + Model.selected.name : "Select a clip on the timeline."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                SectionLabel { text: "Length"; }
+                HSlider { minimum: 0.1; maximum: 4; value: Model.transition-secs; value-text: Math.round(self.value * 10) / 10 + " s"; changed(v) => { Model.transition-secs = v; } }
+                SectionLabel { text: "Where it sits"; }
+                Segmented { items: ["Before", "Centered", "After"]; current: Model.transition-align; changed(i) => { Model.transition-align = i; } }
+                Rectangle { height: 8px; }
+                PrimaryButton { text: "Apply to this cut"; enabled: Model.selected.valid; clicked => { Backend.apply-transition(false); } }
+                GhostButton { text: "Apply to every cut"; clicked => { Backend.apply-transition(true); } }
+                GhostButton { text: "Remove"; danger: true; enabled: Model.selected.valid && Model.selected.transition >= 0; clicked => { Backend.remove-transition(); } }
+            }
+        }
+    }
+}

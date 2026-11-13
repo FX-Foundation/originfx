@@ -1,0 +1,158 @@
+name: App
+
+# Builds the OriginFX app for Linux, Windows and macOS. Run it by hand from the Actions tab
+# ("Run workflow"), or it runs on every push to a frontend/* branch. Download the results
+# from the run page under "Artifacts".
+on:
+  workflow_dispatch:
+  push:
+    branches: ["frontend/**"]
+
+env:
+  CARGO_TERM_COLOR: never
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
+            libclang-dev pkg-config libasound2-dev libxdo-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - name: Build
+        run: |
+          set +e
+          cargo build --release --bin originfx 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -iE '^error|panick|failed|not found|cannot|unable' build.log | head -9 \
+              | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit "$status"
+      - name: Open the window for a few seconds
+        run: |
+          code=0
+          xvfb-run -a timeout 8 ./target/release/originfx || code=$?
+          echo "exit code: $code (124 means it was still running when the timer stopped it)"
+          [ "$code" -eq 124 ] || [ "$code" -eq 0 ]
+      - name: Package
+        run: |
+          mkdir OriginFX-linux
+          cp target/release/originfx assets/originfx.png assets/originfx.desktop OriginFX-linux/
+          cp assets/README-linux.txt OriginFX-linux/README.txt
+          tar -czf OriginFX-0.1.0-linux-x86_64.tar.gz OriginFX-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OriginFX-linux
+          path: app/OriginFX-0.1.0-linux-x86_64.tar.gz
+          retention-days: 30
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - name: FFmpeg 6.1 shared build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          $name = 'ffmpeg-6.1.1-full_build-shared.zip'
+          gh release download 6.1.1 -R GyanD/codexffmpeg -p $name -D ffmpeg-dl --clobber
+          Expand-Archive -Path "ffmpeg-dl/$name" -DestinationPath ffmpeg-x -Force
+          $ff = (Get-ChildItem ffmpeg-x -Directory | Select-Object -First 1).FullName
+          "FFMPEG_DIR=$ff" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build
+        shell: pwsh
+        run: |
+          cargo build --release --bin originfx 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) {
+            Select-String -Path build.log -Pattern '^error|panick|failed|cannot|unable' | Select-Object -First 9 |
+              ForEach-Object { Write-Host "::error::$($_.Line)" }
+            exit $LASTEXITCODE
+          }
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory OriginFX-windows | Out-Null
+          Copy-Item target\release\originfx.exe OriginFX-windows\OriginFX.exe
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" OriginFX-windows\
+          Compress-Archive -Path OriginFX-windows\* -DestinationPath OriginFX-0.1.0-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OriginFX-windows
+          path: app/OriginFX-0.1.0-windows-x86_64.zip
+          retention-days: 30
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - name: Install FFmpeg
+        run: |
+          brew install ffmpeg@6 pkg-config dylibbundler
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@6)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          set +e
+          cargo build --release --bin originfx 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -iE '^error|panick|failed|not found|cannot|unable' build.log | head -9 \
+              | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit "$status"
+      - name: Make the app bundle and disk image
+        run: |
+          APP=OriginFX.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp target/release/originfx "$APP/Contents/MacOS/OriginFX"
+          mkdir -p "$APP/Contents/Frameworks"
+          dylibbundler -od -b -x "$APP/Contents/MacOS/OriginFX" -d "$APP/Contents/Frameworks" -p @executable_path/../Frameworks
+          cp assets/originfx.icns "$APP/Contents/Resources/OriginFX.icns"
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>OriginFX</string>
+            <key>CFBundleDisplayName</key><string>OriginFX</string>
+            <key>CFBundleIdentifier</key><string>org.fxfoundation.originfx</string>
+            <key>CFBundleExecutable</key><string>OriginFX</string>
+            <key>CFBundleIconFile</key><string>OriginFX</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+          codesign --force --deep --sign - "$APP"
+          hdiutil create -volname OriginFX -srcfolder "$APP" -ov -format UDZO OriginFX-0.1.0-macos.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OriginFX-macos
+          path: app/OriginFX-0.1.0-macos.dmg
+          retention-days: 30

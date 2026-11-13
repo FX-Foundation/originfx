@@ -1,0 +1,98 @@
+import "./fonts/Inter-Regular.otf";
+import "./fonts/Inter-Medium.otf";
+import "./fonts/Inter-SemiBold.otf";
+import "./fonts/Cinzel.ttf";
+
+import { Theme, Settings } from "theme.slint";
+import { Palette } from "std-widgets.slint";
+import { Model, Backend, Screen, AssetItem, ClipItem, TrackItem, MarkerItem, ParamItem, EffectItem, KeyItem, FileItem, RecentProject, ShortcutItem, PluginItem, LessonItem, ExportJob, KV, Row4, TakeItem, SelectedClip, LibraryItem } from "store.slint";
+import { WelcomeScreen } from "screens/welcome.slint";
+import { HomeScreen, NewProjectScreen, LearnScreen, LibraryScreen, ProjectSettingsScreen } from "screens/start.slint";
+import { EditorScreen } from "screens/editor.slint";
+import { ImportScreen, InspectorScreen, ProxyScreen, ExportScreen, InterchangeScreen, VoiceoverScreen } from "screens/media.slint";
+import { TrimScreen, MulticamScreen, SpeedScreen, TransitionsScreen } from "screens/editing.slint";
+import { MixerScreen, AudioCleanupScreen } from "screens/audio.slint";
+import { ColorScreen, GradingScreen, ScopesScreen, EffectsScreen } from "screens/look.slint";
+import { TitlesScreen, KeyframesScreen, MasksScreen, CompositionScreen } from "screens/motion.slint";
+import { SettingsScreen, RecoveryScreen } from "screens/system.slint";
+import { Icon } from "components.slint";
+
+export { Settings, Palette, Model, Backend, Screen, AssetItem, ClipItem, TrackItem, MarkerItem, ParamItem, EffectItem, KeyItem, FileItem, RecentProject, ShortcutItem, PluginItem, LessonItem, ExportJob, KV, Row4, TakeItem, SelectedClip, LibraryItem }
+
+export component App inherits Window {
+    title: Model.has-project ? Model.project-name + (Model.dirty ? " • " : " — ") + "OriginFX" : "OriginFX";
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    min-width: 1100px;
+    min-height: 680px;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+    background: Theme.page-bg;
+    icon: @image-url("../assets/originfx.png");
+
+    property <Screen> s: Model.screen;
+
+    property <int> ft: Model.focus-tick;
+    changed ft => { keys.focus(); }
+
+    // Global keyboard handling. Screens sit inside, so keys a text field does not use bubble up here.
+    keys := FocusScope {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        init => { self.focus(); }
+        key-pressed(event) => {
+            if (Backend.key(event.text, event.modifiers.control || event.modifiers.meta, event.modifiers.shift, event.modifiers.alt)) {
+                return accept;
+            }
+            return reject;
+        }
+        if s == Screen.welcome: WelcomeScreen { width: parent.width; height: parent.height; }
+        if s == Screen.home: HomeScreen { width: parent.width; height: parent.height; }
+        if s == Screen.new-project: NewProjectScreen { width: parent.width; height: parent.height; }
+        if s == Screen.learn: LearnScreen { width: parent.width; height: parent.height; }
+        if s == Screen.library: LibraryScreen { width: parent.width; height: parent.height; }
+        if s == Screen.project-settings: ProjectSettingsScreen { width: parent.width; height: parent.height; }
+        if s == Screen.editor: EditorScreen { width: parent.width; height: parent.height; }
+        if s == Screen.import: ImportScreen { width: parent.width; height: parent.height; }
+        if s == Screen.inspector: InspectorScreen { width: parent.width; height: parent.height; }
+        if s == Screen.proxy: ProxyScreen { width: parent.width; height: parent.height; }
+        if s == Screen.export: ExportScreen { width: parent.width; height: parent.height; }
+        if s == Screen.interchange: InterchangeScreen { width: parent.width; height: parent.height; }
+        if s == Screen.voiceover: VoiceoverScreen { width: parent.width; height: parent.height; }
+        if s == Screen.trim: TrimScreen { width: parent.width; height: parent.height; }
+        if s == Screen.multicam: MulticamScreen { width: parent.width; height: parent.height; }
+        if s == Screen.speed: SpeedScreen { width: parent.width; height: parent.height; }
+        if s == Screen.transitions: TransitionsScreen { width: parent.width; height: parent.height; }
+        if s == Screen.mixer: MixerScreen { width: parent.width; height: parent.height; }
+        if s == Screen.audio-cleanup: AudioCleanupScreen { width: parent.width; height: parent.height; }
+        if s == Screen.color: ColorScreen { width: parent.width; height: parent.height; }
+        if s == Screen.grading: GradingScreen { width: parent.width; height: parent.height; }
+        if s == Screen.scopes: ScopesScreen { width: parent.width; height: parent.height; }
+        if s == Screen.effects: EffectsScreen { width: parent.width; height: parent.height; }
+        if s == Screen.titles: TitlesScreen { width: parent.width; height: parent.height; }
+        if s == Screen.keyframes: KeyframesScreen { width: parent.width; height: parent.height; }
+        if s == Screen.masks: MasksScreen { width: parent.width; height: parent.height; }
+        if s == Screen.composition: CompositionScreen { width: parent.width; height: parent.height; }
+        if s == Screen.settings: SettingsScreen { width: parent.width; height: parent.height; }
+        if s == Screen.recovery: RecoveryScreen { width: parent.width; height: parent.height; }
+    }
+
+    // Busy overlay (imports, exports, proxies)
+    if Model.busy: Rectangle {
+        x: parent.width - 340px; y: parent.height - 70px; width: 320px; height: 52px;
+        background: Theme.panel-bg; border-width: 1px; border-color: Theme.border; border-radius: 3px;
+        Text { x: 14px; y: 10px; width: parent.width - 28px; overflow: elide; text: Model.busy-text; color: Theme.text; font-size: 12px; }
+        Rectangle {
+            x: 14px; y: 36px; width: parent.width - 28px; height: 3px; background: Theme.progress-off; border-radius: 1.5px;
+            Rectangle { x: 0px; width: Model.busy-progress < 0 ? parent.width * 0.3 : parent.width * clamp(Model.busy-progress, 0, 1); height: parent.height; background: Theme.accent; border-radius: 1.5px; }
+        }
+    }
+
+    // Toast
+    if Model.toast != "": Rectangle {
+        x: (parent.width - self.width) / 2; y: parent.height - 64px; width: tt.preferred-width + 60px; height: 38px;
+        background: Settings.dark ? #26272c : #1c1d21; border-radius: 3px; border-width: 1px; border-color: Settings.dark ? #3a3c42 : #2a2b30;
+        tt := Text { x: 16px; height: parent.height; vertical-alignment: center; text: Model.toast; color: #f4f5f9; font-size: 12px; }
+        Icon { x: parent.width - 26px; width: 12px; height: 12px; source: @image-url("icons/x.svg"); tint: #b0b1b5; }
+        TouchArea { mouse-cursor: pointer; clicked => { Backend.dismiss-toast(); } }
+    }
+}

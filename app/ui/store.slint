@@ -1,0 +1,643 @@
+// The contract between the UI and the Rust side.
+// Model = state the UI shows. Backend = things the UI asks Rust to do.
+
+export enum Screen {
+    welcome, home, new-project, learn, library, project-settings,
+    import, inspector, proxy, export, interchange, voiceover,
+    editor, trim, multicam, speed, transitions,
+    mixer, audio-cleanup,
+    color, grading, scopes, effects,
+    titles, keyframes, masks, composition,
+    settings, recovery
+}
+
+export struct AssetItem {
+    id: int,
+    name: string,
+    path: string,
+    kind: int,            // 0 video, 1 audio, 2 image, 3 title/text, 4 shape/colour
+    duration: string,
+    secs: float,
+    meta: string,         // "1920×1080 · 30 fps"
+    thumb: image,
+    has-thumb: bool,
+    has-video: bool,
+    has-audio: bool,
+    proxy: int,           // 0 none, 1 ready, 2 generating, 3 queued
+    proxy-text: string,
+    selected: bool,
+}
+
+export struct ClipItem {
+    id: int,
+    name: string,
+    start: float,
+    duration: float,
+    kind: int,            // 0 video, 1 audio, 2 title, 3 overlay/graphic
+    selected: bool,
+    enabled: bool,
+    transition-secs: float,
+    waveform: image,
+    has-waveform: bool,
+    speed: float,
+    asset: int,
+    offline: bool,
+}
+
+export struct TrackItem {
+    id: int,
+    name: string,
+    kind: int,            // 0 video, 1 audio
+    enabled: bool,
+    locked: bool,
+    solo: bool,
+    gain: float,
+    pan: float,
+    level: float,
+    clips: [ClipItem],
+}
+
+export struct MarkerItem { id: int, time: float, name: string, colour: int }
+
+export struct ParamItem {
+    name: string,
+    unit: string,
+    value: float,
+    min: float,
+    max: float,
+    default: float,
+    keyed: bool,
+}
+
+export struct EffectItem {
+    id: int,
+    name: string,
+    kind: int,
+    enabled: bool,
+    params: [ParamItem],
+}
+
+export struct KeyItem { param: int, time: float, value: float, interp: int }
+
+export struct FileItem {
+    name: string,
+    path: string,
+    kind: int,            // 0 video, 1 audio, 2 image, 3 folder, 4 other, 5 project
+    size: string,
+    duration: string,
+    thumb: image,
+    has-thumb: bool,
+    selected: bool,
+}
+
+export struct RecentProject { name: string, path: string, edited: string, aspect: string, thumb: image, has-thumb: bool }
+
+export struct ShortcutItem { id: string, command: string, keys: string }
+
+export struct PluginItem { id: string, name: string, desc: string, enabled: bool, installed: bool, colour: int, builtin: bool }
+
+export struct LessonItem { title: string, sub: string, done: bool, level: int }
+
+export struct ExportJob { name: string, status: string, progress: float, done: bool, failed: bool }
+
+export struct KV { k: string, v: string }
+
+export struct Row4 { a: string, b: string, c: string, d: string, status: int, status-text: string }
+
+export struct LibraryItem { id: int, name: string, kind: int, kind-text: string, desc: string, length: string, works-on: string, looks-like: string, favorite: bool, path: string }
+
+export struct TakeItem { name: string, duration: string, path: string, selected: bool }
+
+export struct SelectedClip {
+    valid: bool,
+    id: int,
+    name: string,
+    kind: int,
+    start: float,
+    duration: float,
+    source-in: float,
+    speed: float,
+    reverse: bool,
+    volume: float,          // dB
+    pan: float,
+    opacity: float,
+    pos-x: float,
+    pos-y: float,
+    scale: float,
+    rotation: float,
+    blend: int,
+    has-mask: bool,
+    mask-shape: int,
+    mask-invert: bool,
+    mask-feather: float,
+    mask-x: float,
+    mask-y: float,
+    mask-w: float,
+    mask-h: float,
+    transition: int,        // -1 none, else index in transition list
+    transition-secs: float,
+    transition-align: int,
+    fade-in: float,
+    fade-out: float,
+    asset-name: string,
+    asset-meta: string,
+    effects: [EffectItem],
+    keys: [KeyItem],
+    has-prev: bool,
+    prev-name: string,
+    prev-id: int,
+    next-name: string,
+    is-text: bool,
+    text: string,
+    text-sub: string,
+    text-size: float,
+    text-colour: int,
+    text-align: int,
+    text-anim-in: int,
+    text-anim-out: int,
+    text-anim-secs: float,
+}
+
+export global Model {
+    // navigation
+    in-out property <Screen> screen: Screen.welcome;
+    in-out property <Screen> previous-screen: Screen.home;
+    in-out property <int> settings-page: 0;
+    in-out property <int> home-page: 0;
+    in-out property <bool> first-run: true;
+    in-out property <string> status: "Running smoothly";
+    in-out property <int> focus-tick: 0;
+    in-out property <string> toast;
+    in-out property <bool> busy: false;
+    in-out property <string> busy-text;
+    in-out property <float> busy-progress: -1;
+
+    // project
+    in-out property <bool> has-project: false;
+    in-out property <string> project-name: "Untitled project";
+    in-out property <string> project-path;
+    in-out property <bool> dirty: false;
+    in-out property <int> seq-width: 1920;
+    in-out property <int> seq-height: 1080;
+    in-out property <float> fps: 30;
+    in-out property <string> fps-text: "30";
+    in-out property <float> duration: 0;
+    in-out property <string> duration-text: "00:00:00:00";
+    in-out property <float> playhead: 0;
+    in-out property <string> playhead-text: "00:00:00:00";
+    in-out property <bool> playing: false;
+    in-out property <image> preview;
+    in-out property <bool> has-preview: false;
+    in-out property <image> source-preview;
+    in-out property <bool> has-source-preview: false;
+    in-out property <float> in-point: -1;
+    in-out property <float> out-point: -1;
+    in-out property <bool> can-undo: false;
+    in-out property <bool> can-redo: false;
+    in-out property <string> undo-label;
+    in-out property <string> redo-label;
+    in-out property <float> master-gain: 0;
+    in-out property <float> master-level: 0;
+    in-out property <int> colour-space: 0;
+    in-out property <int> aspect: 0;
+
+    in-out property <[AssetItem]> assets;
+    in-out property <[TrackItem]> video-tracks;
+    in-out property <[TrackItem]> audio-tracks;
+    in-out property <[MarkerItem]> markers;
+    in-out property <SelectedClip> selected;
+    in-out property <int> selected-track: -1;
+    in-out property <int> tool: 0;   // 0 select, 1 ripple, 2 razor, 3 pen
+    in-out property <float> zoom: 40; // px per second
+    in-out property <float> scroll: 0; // seconds at the left edge
+    in-out property <bool> snapping: true;
+    in-out property <int> editor-tab: 0; // Edit, Color, Audio, Effects
+    in-out property <int> bin-tab: 0;    // Media, Titles, Music, Effects
+    in-out property <int> inspector-tab: 0; // Video, Audio, Color
+    in-out property <string> hint-banner;
+
+    // home / projects
+    in-out property <[RecentProject]> recent;
+    in-out property <string> projects-folder: "~/Videos/OriginFX";
+    in-out property <[LessonItem]> lessons;
+    in-out property <int> lessons-done: 0;
+    in-out property <int> current-lesson: 0;
+    in-out property <[LibraryItem]> library;
+    in-out property <int> library-cat: 0;
+    in-out property <int> library-pick: 0;
+    in-out property <string> library-filter;
+    in-out property <string> gpu-name: "Checking your computer";
+    in-out property <string> gpu-line: "Looking for your graphics card.";
+    in-out property <bool> gpu-ok: false;
+
+    // import
+    in-out property <[string]> import-sources;
+    in-out property <[string]> import-source-paths;
+    in-out property <int> import-source: 0;
+    in-out property <string> import-path;
+    in-out property <string> import-crumbs;
+    in-out property <[FileItem]> files;
+    in-out property <int> files-selected: 0;
+    in-out property <string> files-selected-text;
+    in-out property <int> import-method: 0;    // 0 copy, 1 link
+    in-out property <int> import-proxies: 0;   // 0 auto, 1 off
+    in-out property <bool> import-skip-dupes: true;
+    in-out property <bool> import-by-date: false;
+
+    // inspector
+    in-out property <int> inspector-asset: -1;
+    in-out property <[KV]> inspector-general;
+    in-out property <[KV]> inspector-video;
+    in-out property <[KV]> inspector-audio;
+    in-out property <[KV]> inspector-colour;
+    in-out property <[KV]> inspector-meta;
+    in-out property <[string]> inspector-streams;
+    in-out property <float> inspector-pos: 0;
+    in-out property <float> inspector-len: 0;
+    in-out property <string> inspector-pos-text;
+    in-out property <string> inspector-len-text;
+    in-out property <string> inspector-name;
+    in-out property <bool> inspector-offline: false;
+
+    // proxy & cache
+    in-out property <string> proxy-size: "0 B";
+    in-out property <string> cache-size: "0 B";
+    in-out property <string> free-space: "—";
+    in-out property <int> proxy-mode: 0;      // auto, always, off
+    in-out property <int> proxy-res: 0;       // quarter, half
+    in-out property <float> cache-limit-gb: 50;
+    in-out property <string> cache-location;
+    in-out property <[Row4]> proxy-rows;
+
+    // export
+    in-out property <int> export-preset: 0;
+    in-out property <int> export-format: 0;
+    in-out property <int> export-res: 0;
+    in-out property <int> export-fps: 0;
+    in-out property <int> export-quality: 1;
+    in-out property <int> export-audio: 0;
+    in-out property <int> export-range: 0;
+    in-out property <string> export-name;
+    in-out property <string> export-folder;
+    in-out property <string> export-summary-duration;
+    in-out property <string> export-summary-codec;
+    in-out property <string> export-summary-encoder;
+    in-out property <string> export-summary-size;
+    in-out property <[ExportJob]> export-queue;
+    in-out property <bool> exporting: false;
+    in-out property <float> export-progress: 0;
+    in-out property <string> export-status;
+
+    // interchange
+    in-out property <int> xchg-import: 0;
+    in-out property <int> xchg-export: 2;
+    in-out property <bool> xchg-relink: true;
+    in-out property <bool> xchg-markers-in: true;
+    in-out property <bool> xchg-media-refs: true;
+    in-out property <bool> xchg-markers-out: true;
+    in-out property <string> xchg-status;
+
+    // voiceover
+    in-out property <[string]> input-devices;
+    in-out property <int> input-device: 0;
+    in-out property <int> vo-countdown: 1;    // off, 3s, 5s
+    in-out property <bool> vo-monitor: false;
+    in-out property <float> vo-level: 0;
+    in-out property <bool> vo-recording: false;
+    in-out property <bool> vo-armed: false;
+    in-out property <int> vo-countdown-left: 0;
+    in-out property <string> vo-time: "00:00:00";
+    in-out property <[TakeItem]> takes;
+    in-out property <int> vo-track: 1;
+    in-out property <int> vo-insert: 0;       // playhead, start
+
+    // trim
+    in-out property <int> trim-offset: 0;
+    in-out property <int> trim-mode: 1;
+    in-out property <image> trim-in-img;
+    in-out property <bool> has-trim-in: false;
+    in-out property <image> trim-out-img;
+    in-out property <bool> has-trim-out: false;
+    in-out property <[image]> look-thumbs;
+    in-out property <[image]> effect-thumbs;
+
+    // multicam
+    in-out property <int> mc-sync: 0;          // audio, timecode, marker
+    in-out property <bool> mc-switch-audio: true;
+    in-out property <bool> mc-show-names: true;
+    in-out property <[string]> mc-angles;
+    in-out property <[image]> mc-thumbs;
+    in-out property <[bool]> mc-synced;
+    in-out property <int> mc-current: 0;
+
+    // speed
+    in-out property <int> speed-preset: 0;
+    in-out property <[float]> speed-ramp;     // 4 control values (percent)
+
+    // transitions
+    in-out property <int> transition-cat: 0;
+    in-out property <int> transition-pick: 0;
+    in-out property <float> transition-secs: 1.0;
+    in-out property <int> transition-align: 1;
+
+    // mixer
+    in-out property <[float]> levels;
+
+    // audio cleanup
+    in-out property <int> loudness-target: 0;
+    in-out property <bool> normalize: true;
+    in-out property <image> waveform-original;
+    in-out property <image> waveform-clean;
+    in-out property <string> loudness-text;
+    in-out property <int> cleanup-clip: 0;
+
+    // colour
+    in-out property <int> look-preset: 0;
+    in-out property <float> temperature: 0;
+    in-out property <float> tint: 0;
+    in-out property <float> exposure: 0;
+    in-out property <float> contrast: 0;
+    in-out property <float> saturation: 100;
+    in-out property <float> highlights: 0;
+    in-out property <int> colour-clip: 0;
+    in-out property <int> grading-tab: 0;
+    in-out property <[float]> wheels;          // lift(r,g,b,y) gamma(r,g,b,y) gain(r,g,b,y) offset
+    in-out property <[float]> curve-points;    // x0,y0,x1,y1,... 0..1
+    in-out property <image> scope-waveform;
+    in-out property <image> scope-vector;
+    in-out property <image> scope-histogram;
+    in-out property <image> scope-parade;
+    in-out property <int> scopes-ref: 0;
+    in-out property <int> scopes-target: 1;
+    in-out property <[string]> clip-names;
+
+    // effects
+    in-out property <int> effect-cat: 0;
+    in-out property <int> effect-pick: -1;
+    in-out property <int> effect-selected: -1;  // index in selected.effects
+
+    // titles
+    in-out property <int> title-template: 0;
+    in-out property <string> title-text: "Lorem ipsum";
+    in-out property <string> title-sub: "Dolor sit amet";
+    in-out property <int> title-font: 0;
+    in-out property <float> title-size: 26;
+    in-out property <int> title-colour: 0;
+    in-out property <int> title-in: 0;
+    in-out property <int> title-out: 1;
+    in-out property <float> title-anim-secs: 0.6;
+    in-out property <image> title-preview;
+    in-out property <bool> has-title-preview: false;
+
+    // keyframes
+    in-out property <int> kf-param: 0;
+    in-out property <int> kf-view: 0;
+    in-out property <bool> kf-show-position: true;
+    in-out property <bool> kf-show-scale: true;
+    in-out property <bool> kf-show-rotation: true;
+    in-out property <bool> kf-show-opacity: true;
+
+    // masks / composition
+    in-out property <int> mask-tool: 1;     // rect, ellipse
+    in-out property <int> mask-mode: 0;     // add, subtract, intersect
+    in-out property <[string]> layer-names;
+    in-out property <[int]> layer-ids;
+    in-out property <int> layer-current: 0;
+
+    // settings
+    in-out property <string> language: "English";
+    in-out property <int> autosave-minutes: 2;
+    in-out property <int> default-fps: 0;
+    in-out property <int> default-res: 1;
+    in-out property <bool> hw-accel: true;
+    in-out property <bool> crash-reports: false;
+    in-out property <int> theme-choice: 0;
+    in-out property <int> layout-choice: 0;
+    in-out property <float> ui-scale: 100;
+    in-out property <float> cpu-pct: 0;
+    in-out property <float> gpu-pct: 0;
+    in-out property <float> mem-pct: 0;
+    in-out property <int> governor: 1;
+    in-out property <string> gpu-device: "Detected automatically";
+    in-out property <float> memory-limit-gb: 12;
+    in-out property <float> memory-max-gb: 16;
+    in-out property <bool> background-tasks: true;
+    in-out property <string> cache-size-text: "0 B";
+    in-out property <int> shortcut-preset: 0;
+    in-out property <[ShortcutItem]> shortcuts;
+    in-out property <string> shortcut-filter;
+    in-out property <string> rebinding;
+    in-out property <[PluginItem]> plugins;
+    in-out property <int> plugins-tab: 0;
+    in-out property <string> version: "0.1.0";
+    in-out property <string> update-status: "You are up to date.";
+    in-out property <string> update-checked: "Last checked: never.";
+    in-out property <int> update-channel: 0;
+    in-out property <bool> auto-updates: true;
+    in-out property <bool> update-available: false;
+    in-out property <string> update-url;
+
+    // crash recovery
+    in-out property <[Row4]> recovery-options;
+    in-out property <int> recovery-pick: 0;
+}
+
+export global Backend {
+    // navigation
+    callback go(Screen);
+    callback back();
+    callback open-tool(Screen);
+    callback set-mode(int);
+    callback set-look(int);
+    callback dismiss-toast();
+
+    // welcome
+    callback finish-setup(int, int, int, int, int, string, string); // workspace, look, res, fps, aspect, storage, action
+
+    // projects
+    callback new-project(string, string, int);    // name, folder, template
+    callback open-project-dialog();
+    callback open-recent(string);
+    callback save-project();
+    callback save-project-as();
+    callback close-project();
+    callback set-sequence(int, int, float, int);  // w, h, fps, aspect
+    callback restore-recovery(int);
+    callback open-without-restoring();
+    callback discard-recovery();
+    callback start-lesson(int);
+    callback search-projects(string);
+    callback browse-folder(string) -> string;     // key, returns chosen folder or ""
+    callback library-add(int);
+    callback library-favorite(int);
+    callback library-filter(string);
+    callback library-select(int);
+
+    // import
+    callback import-select-source(int);
+    callback import-open-dir(string);
+    callback import-up();
+    callback import-toggle(int);
+    callback import-select-all(bool);
+    callback import-search(string);
+    callback import-run();
+    callback import-footage-dialog();
+    callback inspect-asset(int);
+    callback inspector-seek(float);
+    callback inspector-play();
+    callback reveal-asset();
+    callback relink-asset();
+    callback remove-asset(int);
+    callback add-asset-to-timeline(int);
+
+    // proxy & cache
+    callback clear-cache();
+    callback regenerate-proxies();
+    callback set-proxy-mode(int);
+    callback set-proxy-res(int);
+    callback set-cache-limit(float);
+    callback choose-cache-location();
+
+    // export
+    callback export-preset(int);
+    callback export-changed();
+    callback export-run();
+    callback export-queue-add();
+    callback export-cancel();
+    callback choose-export-folder();
+
+    // interchange
+    callback xchg-import-file();
+    callback xchg-export-file();
+
+    // voiceover
+    callback vo-select-device(int);
+    callback vo-record();
+    callback vo-stop();
+    callback vo-keep();
+    callback vo-discard();
+    callback vo-select-take(int);
+
+    // transport
+    callback play-pause();
+    callback stop();
+    callback seek(float);
+    callback step(int);
+    callback go-start();
+    callback go-end();
+    callback set-in();
+    callback set-out();
+    callback clear-in-out();
+
+    // timeline editing
+    callback select-clip(int, int);        // track id, clip id
+    callback clear-selection();
+    callback split-at-playhead();
+    callback delete-selected();
+    callback ripple-delete-selected();
+    callback move-clip(int, float, int);   // clip id, delta secs, track delta
+    callback trim-clip(int, int, float, bool); // clip, edge 0 head/1 tail, delta, ripple
+    callback roll-edit(int, float);
+    callback slip-clip(int, float);
+    callback slide-clip(int, float);
+    callback undo();
+    callback redo();
+    callback add-marker();
+    callback remove-marker(int);
+    callback toggle-track-enabled(int);
+    callback toggle-track-locked(int);
+    callback toggle-track-solo(int);
+    callback set-track-gain(int, float);
+    callback set-track-pan(int, float);
+    callback set-master-gain(float);
+    callback set-clip-volume(float);
+    callback set-clip-pan(float);
+    callback set-clip-fades(float, float);
+    callback set-clip-enabled(bool);
+    callback add-track(int);
+    callback set-tool(int);
+    callback zoom-changed(float);
+    callback drop-asset(int, int, float); // asset id, track index (video), start secs
+    callback insert-asset-at-playhead(int);
+    callback rename-clip(string);
+    callback auto-enhance();
+    callback reset-levels();
+    callback auto-balance();
+
+    // trim screen
+    callback trim-nudge(int, int);          // mode (0 ripple,1 roll,2 slip,3 slide), frames
+    callback trim-reset();
+
+    // multicam
+    callback mc-sync-angles();
+    callback mc-cut(int);
+    callback mc-flatten();
+    callback mc-select-angle(int);
+
+    // speed
+    callback set-speed(float, bool);        // percent, reverse
+    callback apply-speed-preset(int);
+    callback apply-speed-ramp();
+    callback freeze-frame();
+
+    // transitions
+    callback apply-transition(bool);        // to all cuts
+    callback remove-transition();
+
+    // audio cleanup
+    callback normalize-loudness();
+    callback cleanup-select-clip(int);
+    callback cleanup-reset();
+
+    // colour
+    callback colour-select-clip(int);
+    callback apply-look(int);
+    callback set-colour(string, float);
+    callback reset-colour();
+    callback set-wheel(int, int, float);    // wheel, channel, value
+    callback set-curve-point(int, float, float);
+    callback reset-curve();
+    callback refresh-scopes();
+
+    // effects
+    callback add-effect(int);
+    callback remove-effect(int);
+    callback toggle-effect(int, bool);
+    callback set-effect-param(int, string, float);
+    callback move-effect(int, int);
+    callback copy-effects-to-clips();
+
+    // titles / graphics
+    callback title-preview();
+    callback title-add();
+    callback title-reset();
+    callback update-selected-text();
+    callback add-shape(int);
+
+    // keyframes
+    callback set-keyframe(int, float, float);     // param, time, value
+    callback remove-keyframe(int, float);
+    callback clear-keyframes(int);
+    callback set-transform(string, float);
+    callback set-blend(int);
+
+    // masks
+    callback apply-mask(int, bool, float, float, float, float, float); // shape, invert, feather, x, y, w, h
+    callback remove-mask();
+    callback select-layer(int);
+
+    // settings
+    callback setting-changed(string, string);     // key, value
+    callback clear-app-cache();
+    callback set-shortcut-preset(int);
+    callback rebind(string);
+    callback rebind-key(string);
+    callback filter-shortcuts(string);
+    callback toggle-plugin(string, bool);
+    callback install-plugin();
+    callback browse-plugins();
+    callback check-updates();
+    callback open-update();
+    callback open-link(string);
+    callback key(string, bool, bool, bool) -> bool;  // key text, ctrl, shift, alt
+}

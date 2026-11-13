@@ -1,0 +1,433 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen } from "../store.slint";
+import { ToolTopBar, PageTitle, PrimaryButton, GhostButton, IconButton, Segmented, SettingRow, SummaryRow, SectionLabel, Divider, Toggle, CheckRow, RadioRow, HSlider, TextField, Chip, ProgressBar, NavList, Dropdown, TableRow, Card, StatCard, Icon, MeterBar, TabBar } from "../components.slint";
+
+component Panel inherits Rectangle {
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+// ---------------------------------------------------------------- Import
+export component ImportScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+
+    // sources
+    Rectangle {
+        x: 0px; y: 44px; width: 200px; height: parent.height - 44px; background: Theme.panel-bg;
+        Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+        VerticalLayout {
+            padding: 18px; spacing: 8px; alignment: start;
+            SectionLabel { text: "Where from"; }
+            NavList {
+                items: Model.import-sources;
+                current: Model.import-source;
+                changed(i) => { Backend.import-select-source(i); }
+            }
+        }
+        GhostButton { x: 18px; y: parent.height - 56px; width: parent.width - 36px; text: "Browse for files"; has-icon: true; icon: @image-url("../icons/folder.svg"); clicked => { Backend.import-footage-dialog(); } }
+    }
+
+    // files
+    Rectangle {
+        x: 200px; y: 44px; width: parent.width - 200px - 280px; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 24px; spacing: 12px;
+            HorizontalLayout {
+                spacing: 10px;
+                IconButton { icon: @image-url("../icons/arrow-up-right.svg"); hint: "Up one folder"; clicked => { Backend.import-up(); } }
+                Text { vertical-alignment: center; text: Model.import-crumbs; color: Theme.text-2; font-size: 12px; overflow: elide; }
+                Rectangle { }
+                TextField { width: 190px; height: 30px; placeholder: "Search this folder"; has-icon: true; icon: @image-url("../icons/search.svg"); edited(t) => { Backend.import-search(t); } }
+            }
+            Panel {
+                vertical-stretch: 1;
+                ScrollView {
+                    content-width: self.width;
+                    VerticalLayout {
+                        alignment: start;
+                        if Model.files.length == 0: Text { text: "No media here."; color: Theme.muted; font-size: 12px; horizontal-alignment: center; height: 80px; vertical-alignment: center; }
+                        for f[i] in Model.files: Rectangle {
+                            height: 48px;
+                            background: f.selected ? Theme.selected-row : (ta.has-hover ? Theme.card-2 : transparent);
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border-soft; }
+                            Rectangle {
+                                x: 14px; y: 14px; width: 18px; height: 18px; border-width: 1px;
+                                border-color: f.selected ? Theme.accent : Theme.border;
+                                background: f.selected ? Theme.accent : transparent;
+                                visible: f.kind != 3;
+                                if f.selected: Icon { width: 11px; height: 11px; source: @image-url("../icons/check.svg"); tint: Theme.on-accent; }
+                            }
+                            Rectangle {
+                                x: 44px; y: 6px; width: 56px; height: 36px; background: Theme.well; clip: true;
+                                if f.has-thumb: Image { source: f.thumb; image-fit: cover; width: parent.width; height: parent.height; }
+                                if !f.has-thumb: Icon { width: 15px; height: 15px; tint: Theme.faint; source: f.kind == 3 ? @image-url("../icons/folder.svg") : f.kind == 1 ? @image-url("../icons/music.svg") : f.kind == 2 ? @image-url("../icons/image.svg") : @image-url("../icons/film.svg"); }
+                            }
+                            Text { x: 114px; y: 0px; width: parent.width - 330px; height: parent.height; vertical-alignment: center; text: f.name; color: Theme.text; font-size: 12.5px; overflow: elide; }
+                            Text { x: parent.width - 200px; width: 80px; height: parent.height; vertical-alignment: center; text: f.duration; color: Theme.muted; font-size: 11.5px; horizontal-alignment: right; }
+                            Text { x: parent.width - 110px; width: 96px; height: parent.height; vertical-alignment: center; text: f.size; color: Theme.muted; font-size: 11.5px; horizontal-alignment: right; }
+                            ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { if (f.kind == 3) { Backend.import-open-dir(f.path); } else { Backend.import-toggle(i); } }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 12px; height: 26px;
+                Text { vertical-alignment: center; text: Model.files-selected-text; color: Theme.muted; font-size: 12px; }
+                Rectangle { }
+                GhostButton { small: true; text: "Select all"; clicked => { Backend.import-select-all(true); } }
+                GhostButton { small: true; text: "Clear"; clicked => { Backend.import-select-all(false); } }
+            }
+        }
+    }
+
+    // options
+    Rectangle {
+        x: parent.width - 280px; y: 44px; width: 280px; height: parent.height - 44px; background: Theme.panel-bg;
+        Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+        VerticalLayout {
+            x: 22px; y: 22px; width: parent.width - 44px; spacing: 10px; alignment: start;
+            Text { text: "Import"; color: Theme.text; font-size: 17px; font-weight: 500; }
+            Text { text: "Pick files, then bring them in."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+            Rectangle { height: 8px; }
+            SectionLabel { text: "Files"; }
+            Segmented { items: ["Copy to project", "Link in place"]; current: Model.import-method; changed(i) => { Model.import-method = i; } }
+            Rectangle { height: 4px; }
+            SectionLabel { text: "Proxies"; }
+            Segmented { items: ["Make automatically", "Off"]; current: Model.import-proxies; changed(i) => { Model.import-proxies = i; } }
+            Rectangle { height: 4px; }
+            CheckRow { text: "Skip files already in the project"; checked: Model.import-skip-dupes; toggled(v) => { Model.import-skip-dupes = v; } }
+        }
+        PrimaryButton { x: 22px; y: parent.height - 64px; width: parent.width - 44px; text: "Import " + Model.files-selected; has-icon: true; icon: @image-url("../icons/download.svg"); enabled: Model.files-selected > 0; clicked => { Backend.import-run(); } }
+    }
+}
+
+// ---------------------------------------------------------------- Inspector
+export component InspectorScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <int> tab: 0;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+
+    // asset list
+    Rectangle {
+        x: 0px; y: 44px; width: 240px; height: parent.height - 44px; background: Theme.panel-bg;
+        Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+        ScrollView {
+            content-width: self.width;
+            VerticalLayout {
+                padding: 14px; spacing: 4px; alignment: start;
+                SectionLabel { text: "Media"; }
+                if Model.assets.length == 0: Text { text: "Nothing imported yet."; color: Theme.muted; font-size: 12px; }
+                for a[i] in Model.assets: Rectangle {
+                    height: 44px;
+                    background: Model.inspector-asset == a.id ? Theme.selected-row : transparent;
+                    Rectangle {
+                        x: 6px; y: 6px; width: 48px; height: 32px; background: Theme.well; clip: true;
+                        if a.has-thumb: Image { source: a.thumb; image-fit: cover; width: parent.width; height: parent.height; }
+                    }
+                    Text { x: 62px; y: 0px; width: parent.width - 68px; height: parent.height; vertical-alignment: center; text: a.name; color: Theme.text; font-size: 12px; overflow: elide; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Backend.inspect-asset(a.id); } }
+                }
+            }
+        }
+    }
+
+    // preview + details
+    ScrollView {
+        x: 240px; y: 44px; width: parent.width - 240px; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 28px; spacing: 14px; alignment: start;
+            HorizontalLayout {
+                PageTitle { title: Model.inspector-name == "" ? "Inspector" : Model.inspector-name; sub: "Everything about a clip, in plain terms."; }
+                Rectangle { }
+                if Model.inspector-offline: Chip { text: "Offline"; kind: 3; }
+            }
+            Panel {
+                height: 300px;
+                Rectangle {
+                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px; background: #000000; clip: true;
+                    if Model.has-source-preview: Image { source: Model.source-preview; image-fit: contain; width: parent.width; height: parent.height; }
+                    if !Model.has-source-preview: Icon { width: 22px; height: 22px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+                }
+            }
+            HorizontalLayout {
+                spacing: 12px; height: 32px;
+                IconButton { icon: @image-url("../icons/play.svg"); hint: "Play"; clicked => { Backend.inspector-play(); } }
+                Text { vertical-alignment: center; text: Model.inspector-pos-text; color: Theme.text-2; font-size: 12px; width: 82px; }
+                HSlider { minimum: 0; maximum: max(Model.inspector-len, 0.01); value: Model.inspector-pos; show-value: false; changed(v) => { Backend.inspector-seek(v); } }
+                Text { vertical-alignment: center; text: Model.inspector-len-text; color: Theme.muted; font-size: 12px; width: 82px; horizontal-alignment: right; }
+            }
+            TabBar { items: ["General", "Video", "Audio", "Color", "Metadata"]; current: root.tab; changed(i) => { root.tab = i; } }
+            Panel {
+                VerticalLayout {
+                    padding: 8px;
+                    for kv[i] in root.tab == 0 ? Model.inspector-general : root.tab == 1 ? Model.inspector-video : root.tab == 2 ? Model.inspector-audio : root.tab == 3 ? Model.inspector-colour : Model.inspector-meta: SummaryRow {
+                        label: kv.k; value: kv.v; last: true; pad: 14px;
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px; alignment: start;
+                GhostButton { text: "Add to timeline"; has-icon: true; icon: @image-url("../icons/plus.svg"); enabled: Model.inspector-asset >= 0; clicked => { Backend.add-asset-to-timeline(Model.inspector-asset); } }
+                GhostButton { text: "Show in folder"; has-icon: true; icon: @image-url("../icons/folder.svg"); enabled: Model.inspector-asset >= 0; clicked => { Backend.reveal-asset(); } }
+                GhostButton { text: "Relink"; has-icon: true; icon: @image-url("../icons/link.svg"); enabled: Model.inspector-asset >= 0; clicked => { Backend.relink-asset(); } }
+                GhostButton { text: "Remove"; danger: true; has-icon: true; icon: @image-url("../icons/trash.svg"); enabled: Model.inspector-asset >= 0; clicked => { Backend.remove-asset(Model.inspector-asset); } }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Proxy & cache
+export component ProxyScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    ScrollView {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; spacing: 18px; alignment: start;
+            PageTitle { title: "Proxies and cache"; sub: "Smaller copies of big clips so editing stays smooth."; }
+            HorizontalLayout {
+                spacing: 12px;
+                StatCard { label: "Proxies"; value: Model.proxy-size; }
+                StatCard { label: "Render cache"; value: Model.cache-size; }
+                StatCard { label: "Free space"; value: Model.free-space; }
+            }
+            Panel {
+                VerticalLayout {
+                    padding: 22px; spacing: 6px;
+                    SettingRow {
+                        label: "Make proxies"; hint: "Automatic makes them only for heavy clips.";
+                        Segmented { x: parent.width - self.width; items: ["Automatic", "Always", "Off"]; current: Model.proxy-mode; changed(i) => { Backend.set-proxy-mode(i); } }
+                    }
+                    SettingRow {
+                        label: "Proxy size"; hint: "Half looks sharper, quarter is lighter.";
+                        Segmented { x: parent.width - self.width; items: ["Quarter", "Half"]; current: Model.proxy-res; changed(i) => { Backend.set-proxy-res(i); } }
+                    }
+                    SettingRow {
+                        label: "Cache limit"; hint: "Old cache is cleared when this is reached.";
+                        HSlider { x: parent.width - 260px; width: 260px; minimum: 5; maximum: 200; value: Model.cache-limit-gb; value-text: Math.round(self.value) + " GB"; changed(v) => { Backend.set-cache-limit(v); } }
+                    }
+                    SettingRow {
+                        label: "Cache location"; hint: Model.cache-location; divider: false;
+                        GhostButton { x: parent.width - self.width; text: "Change"; clicked => { Backend.choose-cache-location(); } }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: start; spacing: 10px;
+                GhostButton { text: "Remake proxies"; has-icon: true; icon: @image-url("../icons/refresh.svg"); clicked => { Backend.regenerate-proxies(); } }
+                GhostButton { text: "Clear cache"; danger: true; has-icon: true; icon: @image-url("../icons/trash.svg"); clicked => { Backend.clear-cache(); } }
+            }
+            SectionLabel { text: "Clips"; }
+            Panel {
+                VerticalLayout {
+                    TableRow { header: true; a: "Name"; b: "Size"; c: "Proxy"; d: ""; cols: [320px, 180px, 180px, 100px]; }
+                    if Model.proxy-rows.length == 0: Text { text: "No clips yet."; color: Theme.muted; font-size: 12px; height: 44px; vertical-alignment: center; }
+                    for r in Model.proxy-rows: TableRow { a: r.a; b: r.b; c: r.c; d: r.d; chip: r.status-text; chip-kind: r.status; cols: [320px, 180px, 180px, 100px]; }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Export
+export component ExportScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> presets: ["YouTube", "Instagram", "TikTok", "Web", "Archive", "Custom"];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+
+    ScrollView {
+        x: 0px; y: 44px; width: parent.width - 320px; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; spacing: 16px; alignment: start;
+            PageTitle { title: "Export"; sub: "Pick where it is going. We handle the settings."; }
+            SectionLabel { text: "Preset"; }
+            HorizontalLayout {
+                spacing: 8px;
+                for p[i] in root.presets: Rectangle {
+                    height: 46px; border-width: 1px;
+                    border-color: Model.export-preset == i ? Theme.accent : Theme.border;
+                    background: Model.export-preset == i ? Theme.accent-soft : Theme.card-bg;
+                    Text { text: p; color: Theme.text; font-size: 12.5px; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Backend.export-preset(i); } }
+                }
+            }
+            Panel {
+                VerticalLayout {
+                    padding: 22px; spacing: 6px;
+                    SettingRow {
+                        label: "Format";
+                        Dropdown { x: parent.width - self.width; width: 190px; items: ["MP4 (H.264)", "MP4 (H.265)", "MOV (ProRes)", "WebM (VP9)", "WAV (audio only)"]; current: Model.export-format; changed(i) => { Model.export-format = i; Backend.export-changed(); } }
+                    }
+                    SettingRow {
+                        label: "Size";
+                        Dropdown { x: parent.width - self.width; width: 190px; items: ["Same as project", "4K", "1080p", "720p", "Vertical 1080×1920", "Square 1080×1080"]; current: Model.export-res; changed(i) => { Model.export-res = i; Backend.export-changed(); } }
+                    }
+                    SettingRow {
+                        label: "Frame rate";
+                        Dropdown { x: parent.width - self.width; width: 190px; items: ["Same as project", "24", "25", "30", "50", "60"]; current: Model.export-fps; changed(i) => { Model.export-fps = i; Backend.export-changed(); } }
+                    }
+                    SettingRow {
+                        label: "Quality";
+                        Segmented { x: parent.width - self.width; items: ["Small", "Balanced", "Best"]; current: Model.export-quality; changed(i) => { Model.export-quality = i; Backend.export-changed(); } }
+                    }
+                    SettingRow {
+                        label: "Audio";
+                        Segmented { x: parent.width - self.width; items: ["AAC", "Uncompressed", "None"]; current: Model.export-audio; changed(i) => { Model.export-audio = i; Backend.export-changed(); } }
+                    }
+                    SettingRow {
+                        label: "Range"; divider: false;
+                        Segmented { x: parent.width - self.width; items: ["Whole timeline", "In to Out"]; current: Model.export-range; changed(i) => { Model.export-range = i; Backend.export-changed(); } }
+                    }
+                }
+            }
+            SectionLabel { text: "Save to"; }
+            HorizontalLayout {
+                spacing: 8px;
+                TextField { text <=> Model.export-name; placeholder: "File name"; height: 34px; edited(t) => { Backend.export-changed(); } }
+                TextField { text: Model.export-folder; read-only: true; height: 34px; }
+                GhostButton { text: "Choose"; clicked => { Backend.choose-export-folder(); } }
+            }
+        }
+    }
+
+    // summary
+    Rectangle {
+        x: parent.width - 320px; y: 44px; width: 320px; height: parent.height - 44px; background: Theme.panel-bg;
+        Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+        VerticalLayout {
+            x: 22px; y: 22px; width: parent.width - 44px; spacing: 4px; alignment: start;
+            Text { text: "Summary"; color: Theme.text; font-size: 17px; font-weight: 500; }
+            Rectangle { height: 10px; }
+            SummaryRow { pad: 0px; label: "Length"; value: Model.export-summary-duration; }
+            SummaryRow { pad: 0px; label: "Codec"; value: Model.export-summary-codec; }
+            SummaryRow { pad: 0px; label: "Encoder"; value: Model.export-summary-encoder; }
+            SummaryRow { pad: 0px; label: "About"; value: Model.export-summary-size; last: true; }
+            Rectangle { height: 18px; }
+            if Model.exporting: VerticalLayout {
+                spacing: 8px;
+                Text { text: Model.export-status; color: Theme.text-2; font-size: 12px; }
+                ProgressBar { value: Model.export-progress; }
+            }
+            if Model.export-queue.length > 0: VerticalLayout {
+                spacing: 6px;
+                SectionLabel { text: "Queue"; }
+                for j in Model.export-queue: Rectangle {
+                    height: 38px;
+                    Text { x: 0px; y: 2px; width: parent.width - 80px; text: j.name; color: Theme.text; font-size: 12px; overflow: elide; }
+                    Text { x: 0px; y: 20px; text: j.status; color: j.failed ? Theme.danger : Theme.muted; font-size: 11px; }
+                    ProgressBar { x: parent.width - 70px; y: 14px; width: 70px; value: j.progress; }
+                }
+            }
+        }
+        if !Model.exporting: PrimaryButton { x: 22px; y: parent.height - 100px; width: parent.width - 44px; text: "Export now"; has-icon: true; icon: @image-url("../icons/upload.svg"); enabled: Model.duration > 0; clicked => { Backend.export-run(); } }
+        if Model.exporting: GhostButton { x: 22px; y: parent.height - 100px; width: parent.width - 44px; text: "Cancel export"; danger: true; clicked => { Backend.export-cancel(); } }
+        GhostButton { x: 22px; y: parent.height - 52px; width: parent.width - 44px; text: "Add to queue"; enabled: Model.duration > 0; clicked => { Backend.export-queue-add(); } }
+    }
+}
+
+// ---------------------------------------------------------------- Interchange
+export component InterchangeScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    ScrollView {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; spacing: 18px; alignment: start;
+            PageTitle { title: "Move projects"; sub: "Bring a timeline in from another editor, or send yours out."; }
+            HorizontalLayout {
+                spacing: 18px;
+                Panel {
+                    VerticalLayout {
+                        padding: 22px; spacing: 12px; alignment: start;
+                        Text { text: "Import a timeline"; color: Theme.text; font-size: 15px; font-weight: 500; }
+                        Segmented { items: ["Final Cut XML", "EDL", "OpenTimelineIO"]; current: Model.xchg-import; changed(i) => { Model.xchg-import = i; } }
+                        CheckRow { text: "Find the media files again"; checked: Model.xchg-relink; toggled(v) => { Model.xchg-relink = v; } }
+                        CheckRow { text: "Bring in markers"; checked: Model.xchg-markers-in; toggled(v) => { Model.xchg-markers-in = v; } }
+                        Rectangle { height: 6px; }
+                        PrimaryButton { text: "Choose a file"; has-icon: true; icon: @image-url("../icons/download.svg"); clicked => { Backend.xchg-import-file(); } }
+                    }
+                }
+                Panel {
+                    VerticalLayout {
+                        padding: 22px; spacing: 12px; alignment: start;
+                        Text { text: "Export a timeline"; color: Theme.text; font-size: 15px; font-weight: 500; }
+                        Segmented { items: ["Final Cut XML", "EDL", "OpenTimelineIO"]; current: Model.xchg-export; changed(i) => { Model.xchg-export = i; } }
+                        CheckRow { text: "Include media paths"; checked: Model.xchg-media-refs; toggled(v) => { Model.xchg-media-refs = v; } }
+                        CheckRow { text: "Include markers"; checked: Model.xchg-markers-out; toggled(v) => { Model.xchg-markers-out = v; } }
+                        Rectangle { height: 6px; }
+                        PrimaryButton { text: "Save a file"; has-icon: true; icon: @image-url("../icons/upload.svg"); enabled: Model.has-project; clicked => { Backend.xchg-export-file(); } }
+                    }
+                }
+            }
+            if Model.xchg-status != "": Text { text: Model.xchg-status; color: Theme.text-2; font-size: 12.5px; wrap: word-wrap; }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Voiceover
+export component VoiceoverScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    ScrollView {
+        x: 0px; y: 44px; width: parent.width - 320px; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; spacing: 18px; alignment: start;
+            PageTitle { title: "Voiceover"; sub: "Record narration right onto your timeline."; }
+            Panel {
+                height: 220px;
+                Rectangle {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    Text { y: 36px; width: parent.width; text: Model.vo-countdown-left > 0 ? Model.vo-countdown-left + "" : Model.vo-time; color: Model.vo-recording ? Theme.danger : Theme.text; font-size: 44px; font-weight: 300; horizontal-alignment: center; }
+                    MeterBar { x: 60px; y: 120px; width: parent.width - 120px; height: 10px; level: Model.vo-level; }
+                    if !Model.vo-recording && Model.vo-countdown-left == 0: PrimaryButton { x: parent.width / 2 - 70px; y: 156px; width: 140px; text: "Record"; has-icon: true; icon: @image-url("../icons/record.svg"); clicked => { Backend.vo-record(); } }
+                    if Model.vo-recording || Model.vo-countdown-left > 0: GhostButton { x: parent.width / 2 - 70px; y: 156px; width: 140px; text: "Stop"; has-icon: true; icon: @image-url("../icons/stop.svg"); danger: true; clicked => { Backend.vo-stop(); } }
+                }
+            }
+            SectionLabel { text: "Takes"; }
+            Panel {
+                VerticalLayout {
+                    if Model.takes.length == 0: Text { text: "Nothing recorded yet."; color: Theme.muted; font-size: 12px; height: 54px; vertical-alignment: center; horizontal-alignment: center; }
+                    for t[i] in Model.takes: Rectangle {
+                        height: 44px; background: t.selected ? Theme.selected-row : transparent;
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border-soft; }
+                        Icon { x: 16px; width: 14px; height: 14px; source: @image-url("../icons/mic.svg"); tint: Theme.muted; }
+                        Text { x: 44px; width: parent.width - 140px; height: parent.height; vertical-alignment: center; text: t.name; color: Theme.text; font-size: 12.5px; }
+                        Text { x: parent.width - 90px; width: 74px; height: parent.height; vertical-alignment: center; horizontal-alignment: right; text: t.duration; color: Theme.muted; font-size: 12px; }
+                        TouchArea { mouse-cursor: pointer; clicked => { Backend.vo-select-take(i); } }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: start; spacing: 10px;
+                PrimaryButton { text: "Keep take"; has-icon: true; icon: @image-url("../icons/check.svg"); enabled: Model.takes.length > 0; clicked => { Backend.vo-keep(); } }
+                GhostButton { text: "Discard"; danger: true; has-icon: true; icon: @image-url("../icons/trash.svg"); enabled: Model.takes.length > 0; clicked => { Backend.vo-discard(); } }
+            }
+        }
+    }
+    Rectangle {
+        x: parent.width - 320px; y: 44px; width: 320px; height: parent.height - 44px; background: Theme.panel-bg;
+        Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+        VerticalLayout {
+            x: 22px; y: 22px; width: parent.width - 44px; spacing: 12px; alignment: start;
+            Text { text: "Recording setup"; color: Theme.text; font-size: 17px; font-weight: 500; }
+            SectionLabel { text: "Microphone"; }
+            Dropdown { items: Model.input-devices; current: Model.input-device; changed(i) => { Backend.vo-select-device(i); } }
+            SectionLabel { text: "Countdown"; }
+            Segmented { items: ["Off", "3 seconds", "5 seconds"]; current: Model.vo-countdown; changed(i) => { Model.vo-countdown = i; } }
+            SectionLabel { text: "Put it on"; }
+            Segmented { items: ["At playhead", "At start"]; current: Model.vo-insert; changed(i) => { Model.vo-insert = i; } }
+            CheckRow { text: "Hear myself while recording"; checked: Model.vo-monitor; toggled(v) => { Model.vo-monitor = v; } }
+        }
+    }
+}
