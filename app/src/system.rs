@@ -141,33 +141,41 @@ pub fn handle_key(st: &mut State, ui: &App, text: &str, ctrl: bool, shift: bool,
     }
     let id = SHORTCUTS.iter().map(|s| s.0).find(|id| binding(st, id).eq_ignore_ascii_case(&combo));
     let Some(id) = id else { return false };
-    let b = ui.global::<Backend>();
     let in_editor_ish = st.session.is_some();
-    match id {
-        "play" => b.invoke_play_pause(),
-        "split" => b.invoke_split_at_playhead(),
-        "delete" => b.invoke_delete_selected(),
-        "ripple" => b.invoke_ripple_delete_selected(),
-        "undo" => b.invoke_undo(),
-        "redo" => b.invoke_redo(),
-        "marker" => b.invoke_add_marker(),
-        "zoom-in" => b.invoke_zoom_changed(m.get_zoom() * 1.25),
-        "zoom-out" => b.invoke_zoom_changed(m.get_zoom() / 1.25),
-        "export" => b.invoke_open_tool(Screen::Export),
-        "mode" => b.invoke_set_mode(if ui.global::<Settings>().get_mode() == 2 { 0 } else { 2 }),
-        "save" => b.invoke_save_project(),
-        "import" => b.invoke_open_tool(Screen::Import),
-        "back-frame" => b.invoke_step(-1),
-        "fwd-frame" => b.invoke_step(1),
-        "start" => b.invoke_go_start(),
-        "end" => b.invoke_go_end(),
-        "in" => b.invoke_set_in(),
-        "out" => b.invoke_set_out(),
-        "select-tool" => b.invoke_set_tool(0),
-        "razor-tool" => b.invoke_set_tool(2),
-        "ripple-tool" => b.invoke_set_tool(1),
-        _ => return false,
-    }
+    let zoom = m.get_zoom();
+    let pro = ui.global::<Settings>().get_mode() == 2;
+    // The key handler runs while the app state is borrowed, and the actions borrow
+    // it again, so they run on the next turn of the event loop.
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(std::time::Duration::from_millis(0), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let b = ui.global::<Backend>();
+        match id {
+            "play" => b.invoke_play_pause(),
+            "split" => b.invoke_split_at_playhead(),
+            "delete" => b.invoke_delete_selected(),
+            "ripple" => b.invoke_ripple_delete_selected(),
+            "undo" => b.invoke_undo(),
+            "redo" => b.invoke_redo(),
+            "marker" => b.invoke_add_marker(),
+            "zoom-in" => b.invoke_zoom_changed(zoom * 1.25),
+            "zoom-out" => b.invoke_zoom_changed(zoom / 1.25),
+            "export" => b.invoke_open_tool(Screen::Export),
+            "mode" => b.invoke_set_mode(if pro { 0 } else { 2 }),
+            "save" => b.invoke_save_project(),
+            "import" => b.invoke_open_tool(Screen::Import),
+            "back-frame" => b.invoke_step(-1),
+            "fwd-frame" => b.invoke_step(1),
+            "start" => b.invoke_go_start(),
+            "end" => b.invoke_go_end(),
+            "in" => b.invoke_set_in(),
+            "out" => b.invoke_set_out(),
+            "select-tool" => b.invoke_set_tool(0),
+            "razor-tool" => b.invoke_set_tool(2),
+            "ripple-tool" => b.invoke_set_tool(1),
+            _ => {}
+        }
+    });
     in_editor_ish || matches!(id, "mode" | "import")
 }
 

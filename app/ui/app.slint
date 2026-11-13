@@ -34,6 +34,7 @@ export component App inherits Window {
 
     property <int> ft: Model.focus-tick;
     changed ft => { keys.focus(); }
+    changed s => { keys.focus(); }
 
     // Global keyboard handling. Screens sit inside, so keys a text field does not use bubble up here.
     keys := FocusScope {
