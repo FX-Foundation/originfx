@@ -1,0 +1,245 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen } from "../store.slint";
+import { ToolTopBar, PageTitle, PrimaryButton, GhostButton, IconButton, Segmented, SectionLabel, Toggle, CheckRow, HSlider, Chip, Icon, Dropdown, Tile, TabBar } from "../components.slint";
+
+component Panel inherits Rectangle {
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+component Monitor inherits Rectangle {
+    background: #000000;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    if Model.has-preview: Image { source: Model.preview; image-fit: contain; width: parent.width; height: parent.height; }
+    if !Model.has-preview: Icon { width: 20px; height: 20px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+}
+
+component NeedClip inherits Rectangle {
+    Text { text: "Pick a clip on the timeline first."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+component Transport inherits HorizontalLayout {
+    height: 32px; spacing: 10px; alignment: start;
+    IconButton { icon: @image-url("../icons/skip-back.svg"); clicked => { Backend.go-start(); } }
+    IconButton { icon: Model.playing ? @image-url("../icons/pause.svg") : @image-url("../icons/play.svg"); clicked => { Backend.play-pause(); } }
+    Text { vertical-alignment: center; text: Model.playhead-text; color: Theme.text-2; font-size: 12px; }
+}
+
+// ---------------------------------------------------------------- Color
+export component ColorScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> looks: ["Natural", "Cinematic", "Warm", "Cool", "Mono"];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    if !Model.selected.valid: NeedClip { x: 0px; y: 44px; width: parent.width; height: parent.height - 44px; }
+    if Model.selected.valid: HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 32px; spacing: 14px;
+            PageTitle { title: "Color"; sub: Model.selected.name; }
+            Monitor { vertical-stretch: 1; }
+            Transport { }
+            SectionLabel { text: "Looks"; }
+            HorizontalLayout {
+                spacing: 8px; height: 90px;
+                for l[i] in root.looks: Rectangle {
+                    border-width: Model.look-preset == i ? 2px : 1px;
+                    border-color: Model.look-preset == i ? Theme.accent : Theme.border;
+                    background: Theme.well; clip: true;
+                    if i < Model.look-thumbs.length: Image { source: Model.look-thumbs[i]; image-fit: cover; width: parent.width; height: parent.height; }
+                    Rectangle { y: parent.height - 20px; height: 20px; background: #00000099; }
+                    Text { y: parent.height - 20px; height: 20px; width: parent.width; text: l; color: #ffffff; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Backend.apply-look(i); } }
+                }
+            }
+        }
+        Rectangle {
+            width: 340px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            VerticalLayout {
+                x: 22px; y: 22px; width: parent.width - 44px; spacing: 12px; alignment: start;
+                SectionLabel { text: "Basic"; }
+                HSlider { label: "Warmth"; minimum: -100; maximum: 100; value: Model.temperature; released => { Backend.set-colour("temperature", self.value); } }
+                HSlider { label: "Tint"; minimum: -100; maximum: 100; value: Model.tint; released => { Backend.set-colour("tint", self.value); } }
+                HSlider { label: "Exposure"; minimum: -2; maximum: 2; value: Model.exposure; value-text: Math.round(self.value * 100) / 100 + ""; released => { Backend.set-colour("exposure", self.value); } }
+                HSlider { label: "Contrast"; minimum: -100; maximum: 100; value: Model.contrast; released => { Backend.set-colour("contrast", self.value); } }
+                HSlider { label: "Saturation"; minimum: 0; maximum: 200; value: Model.saturation; released => { Backend.set-colour("saturation", self.value); } }
+                HSlider { label: "Highlights"; minimum: -50; maximum: 50; value: Model.highlights; released => { Backend.set-colour("highlights", self.value); } }
+                Rectangle { height: 8px; }
+                GhostButton { text: "Open color wheels"; clicked => { Backend.go(Screen.grading); } }
+                GhostButton { text: "Reset color"; has-icon: true; icon: @image-url("../icons/undo.svg"); clicked => { Backend.reset-colour(); } }
+            }
+        }
+    }
+}
+
+component WheelGroup inherits Rectangle {
+    in property <string> title;
+    in property <int> index;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    VerticalLayout {
+        padding: 16px; spacing: 8px; alignment: start;
+        Text { text: root.title; color: Theme.text; font-size: 13px; font-weight: 500; }
+        HSlider { label: "Red"; minimum: -1; maximum: 1; value: root.index * 3 < Model.wheels.length ? Model.wheels[root.index * 3] : 0; value-text: Math.round(self.value * 100) + ""; released => { Backend.set-wheel(root.index, 0, self.value); } }
+        HSlider { label: "Green"; minimum: -1; maximum: 1; value: root.index * 3 + 1 < Model.wheels.length ? Model.wheels[root.index * 3 + 1] : 0; value-text: Math.round(self.value * 100) + ""; released => { Backend.set-wheel(root.index, 1, self.value); } }
+        HSlider { label: "Blue"; minimum: -1; maximum: 1; value: root.index * 3 + 2 < Model.wheels.length ? Model.wheels[root.index * 3 + 2] : 0; value-text: Math.round(self.value * 100) + ""; released => { Backend.set-wheel(root.index, 2, self.value); } }
+        HSlider { label: "Master"; minimum: -1; maximum: 1; value: 0; value-text: ""; released => { Backend.set-wheel(root.index, 3, self.value); } }
+    }
+}
+
+// ---------------------------------------------------------------- Grading
+export component GradingScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    if !Model.selected.valid: NeedClip { x: 0px; y: 44px; width: parent.width; height: parent.height - 44px; }
+    if Model.selected.valid: HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 32px; spacing: 14px;
+            HorizontalLayout {
+                PageTitle { title: "Grading"; sub: Model.selected.name; }
+                Rectangle { }
+                TabBar { items: ["Wheels", "Curve"]; current: Model.grading-tab; changed(i) => { Model.grading-tab = i; } }
+            }
+            Monitor { vertical-stretch: 1; }
+            Transport { }
+        }
+        ScrollView {
+            width: 400px; content-width: self.width;
+            VerticalLayout {
+                padding: 22px; spacing: 12px; alignment: start;
+                if Model.grading-tab == 0: VerticalLayout {
+                    spacing: 12px;
+                    WheelGroup { title: "Shadows (lift)"; index: 0; height: 190px; }
+                    WheelGroup { title: "Midtones (gamma)"; index: 1; height: 190px; }
+                    WheelGroup { title: "Highlights (gain)"; index: 2; height: 190px; }
+                    WheelGroup { title: "Overall (offset)"; index: 3; height: 190px; }
+                }
+                if Model.grading-tab == 1: VerticalLayout {
+                    spacing: 12px;
+                    Text { text: "Bend the tone: shadows, midtones, highlights."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                    Panel {
+                        height: 220px;
+                        Rectangle { x: 20px; y: 20px; width: parent.width - 40px; height: parent.height - 40px;
+                            Path {
+                                width: parent.width; height: parent.height; viewbox-width: 100; viewbox-height: 100; stroke: Theme.accent; stroke-width: 2px; fill: transparent;
+                                MoveTo { x: 0; y: 100; }
+                                LineTo { x: 25; y: 100 - (Model.curve-points.length > 0 ? Model.curve-points[0] * 100 : 25); }
+                                LineTo { x: 50; y: 100 - (Model.curve-points.length > 1 ? Model.curve-points[1] * 100 : 50); }
+                                LineTo { x: 75; y: 100 - (Model.curve-points.length > 2 ? Model.curve-points[2] * 100 : 75); }
+                                LineTo { x: 100; y: 0; }
+                            }
+                        }
+                    }
+                    HSlider { label: "Shadows"; minimum: 0; maximum: 1; value: Model.curve-points.length > 0 ? Model.curve-points[0] : 0.25; value-text: Math.round(self.value * 100) + ""; released => { Backend.set-curve-point(0, 0.25, self.value); } }
+                    HSlider { label: "Midtones"; minimum: 0; maximum: 1; value: Model.curve-points.length > 1 ? Model.curve-points[1] : 0.5; value-text: Math.round(self.value * 100) + ""; released => { Backend.set-curve-point(1, 0.5, self.value); } }
+                    HSlider { label: "Highlights"; minimum: 0; maximum: 1; value: Model.curve-points.length > 2 ? Model.curve-points[2] : 0.75; value-text: Math.round(self.value * 100) + ""; released => { Backend.set-curve-point(2, 0.75, self.value); } }
+                    GhostButton { text: "Reset curve"; clicked => { Backend.reset-curve(); } }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Scopes
+export component ScopesScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    VerticalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        padding: 32px; spacing: 14px;
+        HorizontalLayout {
+            PageTitle { title: "Scopes"; sub: "See light and color as numbers."; }
+            Rectangle { }
+            GhostButton { text: "Refresh"; has-icon: true; icon: @image-url("../icons/refresh.svg"); clicked => { Backend.refresh-scopes(); } }
+        }
+        HorizontalLayout {
+            spacing: 14px; vertical-stretch: 1;
+            Monitor { horizontal-stretch: 1.3; }
+            VerticalLayout {
+                spacing: 14px; horizontal-stretch: 1;
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout { spacing: 4px; Text { text: "Waveform"; color: Theme.muted; font-size: 11.5px; } Panel { Image { x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; source: Model.scope-waveform; image-fit: fill; } } }
+                    VerticalLayout { spacing: 4px; Text { text: "Vectorscope"; color: Theme.muted; font-size: 11.5px; } Panel { Image { x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; source: Model.scope-vector; image-fit: contain; } } }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout { spacing: 4px; Text { text: "RGB parade"; color: Theme.muted; font-size: 11.5px; } Panel { Image { x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; source: Model.scope-parade; image-fit: fill; } } }
+                    VerticalLayout { spacing: 4px; Text { text: "Histogram"; color: Theme.muted; font-size: 11.5px; } Panel { Image { x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; source: Model.scope-histogram; image-fit: fill; } } }
+                }
+            }
+        }
+        Transport { }
+    }
+}
+
+// ---------------------------------------------------------------- Effects
+export component EffectsScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> cats: ["All", "Blur", "Light", "Color", "Stylize"];
+    property <[string]> names: ["Gaussian blur", "Sharpen", "Mosaic", "Vignette", "Brightness", "Exposure", "Contrast", "Saturation", "Hue shift", "Temperature", "Sepia", "Black and white", "Invert", "Gamma"];
+    property <[int]> catof: [1, 1, 4, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 2];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        ScrollView {
+            content-width: self.width;
+            VerticalLayout {
+                padding: 32px; spacing: 16px; alignment: start;
+                PageTitle { title: "Effects"; sub: "Click one to add it to the selected clip."; }
+                TabBar { items: root.cats; current: Model.effect-cat; changed(i) => { Model.effect-cat = i; } }
+                Rectangle {
+                    property <int> cols: 4;
+                    property <length> gap: 12px;
+                    property <length> cw: (self.width - (cols - 1) * gap) / cols;
+                    height: 4 * 124px;
+                    for n[i] in root.names: Tile {
+                        visible: Model.effect-cat == 0 || root.catof[i] == Model.effect-cat;
+                        x: mod(i, cols) * (cw + gap); y: floor(i / cols) * 124px; width: cw;
+                        name: n; thumb-h: 70px;
+                        has-thumb: i < Model.effect-thumbs.length;
+                        thumb: i < Model.effect-thumbs.length ? Model.effect-thumbs[i] : @image-url("../icons/wand.svg");
+                        selected: Model.effect-pick == i;
+                        clicked => { Model.effect-pick = i; Backend.add-effect(i); }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 340px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            ScrollView {
+                content-width: self.width;
+                VerticalLayout {
+                    padding: 22px; spacing: 10px; alignment: start;
+                    Text { text: "On this clip"; color: Theme.text; font-size: 17px; font-weight: 500; }
+                    if !Model.selected.valid: Text { text: "Select a clip on the timeline."; color: Theme.muted; font-size: 12px; }
+                    for e[i] in Model.selected.effects: Panel {
+                        VerticalLayout {
+                            padding: 12px; spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px; height: 26px;
+                                Toggle { on: e.enabled; toggled(v) => { Backend.toggle-effect(e.id, v); } }
+                                Text { vertical-alignment: center; text: e.name; color: Theme.text; font-size: 12.5px; }
+                                Rectangle { }
+                                IconButton { size: 24px; icon-size: 12px; icon: @image-url("../icons/trash.svg"); hint: "Remove"; clicked => { Backend.remove-effect(e.id); } }
+                            }
+                            for p in e.params: HSlider {
+                                label: p.name; minimum: p.min; maximum: p.max; value: p.value;
+                                value-text: Math.round(self.value * 100) / 100 + p.unit;
+                                released => { Backend.set-effect-param(e.id, p.name, self.value); }
+                            }
+                        }
+                    }
+                    if Model.selected.effects.length > 0: GhostButton { text: "Copy to all clips"; clicked => { Backend.copy-effects-to-clips(); } }
+                }
+            }
+        }
+    }
+}

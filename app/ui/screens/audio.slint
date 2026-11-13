@@ -1,0 +1,117 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen } from "../store.slint";
+import { ToolTopBar, PageTitle, PrimaryButton, GhostButton, IconButton, Segmented, SectionLabel, Toggle, CheckRow, HSlider, Chip, Icon, Dropdown, Fader, MeterBar, Card, StatCard } from "../components.slint";
+
+component Panel inherits Rectangle {
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+component Strip inherits Rectangle {
+    in property <string> name;
+    in property <float> db;
+    in property <float> level;
+    in property <float> pan;
+    in property <bool> enabled: true;
+    in property <bool> solo: false;
+    in property <bool> master: false;
+    callback gain-changed(float);
+    callback pan-changed(float);
+    callback mute-toggled();
+    callback solo-toggled();
+    width: 112px;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    Text { x: 0px; y: 12px; width: parent.width; text: root.name; color: Theme.text; font-size: 12px; font-weight: 500; horizontal-alignment: center; overflow: elide; }
+    Fader { x: 26px; y: 40px; width: parent.width - 52px; height: parent.height - 190px; db: root.db; level: root.level; changed(v) => { root.gain-changed(v); } }
+    Text { x: 0px; y: parent.height - 142px; width: parent.width; text: (Math.round(root.db * 10) / 10) + " dB"; color: Theme.text-2; font-size: 11.5px; horizontal-alignment: center; }
+    if !root.master: HSlider { x: 10px; y: parent.height - 118px; width: parent.width - 20px; minimum: -1; maximum: 1; value: root.pan; show-value: false; changed(v) => { root.pan-changed(v); } }
+    if !root.master: Text { x: 0px; y: parent.height - 98px; width: parent.width; text: root.pan == 0 ? "Center" : root.pan < 0 ? "L " + Math.round(-root.pan * 100) : "R " + Math.round(root.pan * 100); color: Theme.muted; font-size: 10.5px; horizontal-alignment: center; }
+    if !root.master: HorizontalLayout {
+        x: 12px; y: parent.height - 64px; width: parent.width - 24px; height: 28px; spacing: 6px;
+        GhostButton { small: true; text: "Mute"; bordered: !root.enabled; clicked => { root.mute-toggled(); } }
+        GhostButton { small: true; text: "Solo"; bordered: root.solo; clicked => { root.solo-toggled(); } }
+    }
+}
+
+// ---------------------------------------------------------------- Mixer
+export component MixerScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    VerticalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        padding: 32px; spacing: 16px;
+        HorizontalLayout {
+            PageTitle { title: "Mixer"; sub: "Balance every audio track."; }
+            Rectangle { }
+            GhostButton { text: "Auto balance"; has-icon: true; icon: @image-url("../icons/wand.svg"); clicked => { Backend.auto-balance(); } }
+            Rectangle { width: 8px; }
+            GhostButton { text: "Reset"; has-icon: true; icon: @image-url("../icons/undo.svg"); clicked => { Backend.reset-levels(); } }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            content-width: (Model.audio-tracks.length + 1) * 120px;
+            HorizontalLayout {
+                spacing: 8px; alignment: start; padding-bottom: 12px;
+                for t[i] in Model.audio-tracks: Strip {
+                    height: 420px; name: t.name; db: t.gain; pan: t.pan; enabled: t.enabled; solo: t.solo;
+                    level: i < Model.levels.length ? Model.levels[i] : 0;
+                    gain-changed(v) => { Backend.set-track-gain(t.id, v); }
+                    pan-changed(v) => { Backend.set-track-pan(t.id, v); }
+                    mute-toggled => { Backend.toggle-track-enabled(t.id); }
+                    solo-toggled => { Backend.toggle-track-solo(t.id); }
+                }
+                Strip {
+                    height: 420px; name: "Master"; master: true; db: Model.master-gain; level: Model.master-level;
+                    gain-changed(v) => { Backend.set-master-gain(v); }
+                }
+            }
+        }
+        HorizontalLayout {
+            height: 32px; spacing: 10px;
+            IconButton { icon: Model.playing ? @image-url("../icons/pause.svg") : @image-url("../icons/play.svg"); clicked => { Backend.play-pause(); } }
+            Text { vertical-alignment: center; text: Model.playhead-text; color: Theme.text-2; font-size: 12px; }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Audio cleanup
+export component AudioCleanupScreen inherits Rectangle {
+    background: Theme.page-bg;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    ScrollView {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; spacing: 16px; alignment: start;
+            PageTitle { title: "Audio cleanup"; sub: "Bring a clip to a steady loudness."; }
+            if Model.clip-names.length == 0: Panel {
+                height: 120px;
+                Text { text: "No audio on the timeline yet."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            if Model.clip-names.length > 0: VerticalLayout {
+                spacing: 16px;
+                HorizontalLayout {
+                    spacing: 12px; alignment: start;
+                    Text { vertical-alignment: center; text: "Clip"; color: Theme.muted; font-size: 12px; }
+                    Dropdown { width: 280px; items: Model.clip-names; current: Model.cleanup-clip; changed(i) => { Backend.cleanup-select-clip(i); } }
+                }
+                SectionLabel { text: "Before"; }
+                Panel { height: 96px; Image { x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; source: Model.waveform-original; image-fit: fill; colorize: Theme.waveform; } }
+                SectionLabel { text: "After"; }
+                Panel { height: 96px; Image { x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; source: Model.waveform-clean; image-fit: fill; colorize: Theme.success; } }
+                Text { text: Model.loudness-text; color: Theme.text-2; font-size: 12.5px; }
+                SectionLabel { text: "Target loudness"; }
+                Segmented { items: ["Online video (−14)", "Voice (−16)", "Broadcast (−23)"]; current: Model.loudness-target; changed(i) => { Model.loudness-target = i; } }
+                HorizontalLayout {
+                    spacing: 10px; alignment: start;
+                    PrimaryButton { text: "Normalize"; has-icon: true; icon: @image-url("../icons/volume.svg"); clicked => { Backend.normalize-loudness(); } }
+                    GhostButton { text: "Reset"; has-icon: true; icon: @image-url("../icons/undo.svg"); clicked => { Backend.cleanup-reset(); } }
+                }
+            }
+        }
+    }
+}

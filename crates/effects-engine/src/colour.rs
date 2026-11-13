@@ -180,3 +180,67 @@ pub fn vignette(rgba: &mut [u8], w: usize, h: usize, amount: f64, softness: f64)
         }
     }
 }
+
+/// Three-way colour balance. `v` holds lift, gamma, gain and offset for r, g, b (12 values, each
+/// -1..1). Lift raises or lowers the shadows, gain scales the highlights, gamma bends the
+/// midtones, and offset moves everything.
+pub(crate) fn balance(rgba: &mut [u8], v: &[f64]) {
+    let mut lut = [[0u8; 256]; 3];
+    for c in 0..3 {
+        let lift = v[c] * 0.5;
+        let gamma = 2f64.powf(-v[3 + c] * 1.5);
+        let gain = 1.0 + v[6 + c];
+        let offset = v[9 + c] * 0.25;
+        for (i, slot) in lut[c].iter_mut().enumerate() {
+            let x = i as f64 / 255.0;
+            let y = (x * gain + lift * (1.0 - x)).clamp(0.0, 1.0).powf(gamma) + offset;
+            *slot = (y.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = lut[0][px[0] as usize];
+        px[1] = lut[1][px[1] as usize];
+        px[2] = lut[2][px[2] as usize];
+    }
+}
+
+/// A luma curve through (0,0), (.25,low), (.5,mid), (.75,high), (1,1), as a monotone cubic.
+pub(crate) fn luma_curve(rgba: &mut [u8], low: f64, mid: f64, high: f64) {
+    let xs = [0.0, 0.25, 0.5, 0.75, 1.0];
+    let ys = [0.0, low, mid, high, 1.0];
+    // Fritsch-Carlson tangents
+    let n = xs.len();
+    let mut d = [0.0f64; 4];
+    for i in 0..n - 1 {
+        d[i] = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]);
+    }
+    let mut m = [0.0f64; 5];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for i in 1..n - 1 {
+        m[i] = if d[i - 1] * d[i] <= 0.0 { 0.0 } else { (d[i - 1] + d[i]) / 2.0 };
+    }
+    let mut lut = [0u8; 256];
+    for (i, slot) in lut.iter_mut().enumerate() {
+        let x = i as f64 / 255.0;
+        let k = ((x / 0.25).floor() as usize).min(3);
+        let h = xs[k + 1] - xs[k];
+        let t = (x - xs[k]) / h;
+        let (t2, t3) = (t * t, t * t * t);
+        let y = (2.0 * t3 - 3.0 * t2 + 1.0) * ys[k]
+            + (t3 - 2.0 * t2 + t) * h * m[k]
+            + (-2.0 * t3 + 3.0 * t2) * ys[k + 1]
+            + (t3 - t2) * h * m[k + 1];
+        *slot = (y.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    for px in rgba.chunks_exact_mut(4) {
+        let l = 0.2126 * px[0] as f64 + 0.7152 * px[1] as f64 + 0.0722 * px[2] as f64;
+        let li = l.round().clamp(0.0, 255.0) as usize;
+        let target = lut[li] as f64;
+        let ratio = if l > 0.5 { target / l } else { 1.0 };
+        for c in 0..3 {
+            let v = if l > 0.5 { px[c] as f64 * ratio } else { target };
+            px[c] = v.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+}

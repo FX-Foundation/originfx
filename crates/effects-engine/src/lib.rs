@@ -38,6 +38,10 @@ pub enum Kind {
     Sharpen,
     Vignette,
     Pixelate,
+    /// Three-way colour balance: lift (shadows), gamma (midtones) and gain (highlights), per channel.
+    Balance,
+    /// Luma curve through three control points at 25%, 50% and 75% input.
+    Curve,
 }
 
 /// One setting of an effect.
@@ -72,7 +76,7 @@ const fn p(
 }
 
 impl Kind {
-    pub const ALL: [Kind; 14] = [
+    pub const ALL: [Kind; 16] = [
         Kind::Brightness,
         Kind::Contrast,
         Kind::Exposure,
@@ -87,6 +91,8 @@ impl Kind {
         Kind::Sharpen,
         Kind::Vignette,
         Kind::Pixelate,
+        Kind::Balance,
+        Kind::Curve,
     ];
 
     /// The name used in project files and on the command line.
@@ -106,6 +112,8 @@ impl Kind {
             Kind::Sharpen => "sharpen",
             Kind::Vignette => "vignette",
             Kind::Pixelate => "pixelate",
+            Kind::Balance => "balance",
+            Kind::Curve => "curve",
         }
     }
 
@@ -133,6 +141,25 @@ impl Kind {
             p("softness", "%", 50.0, 0.0, 100.0, 50.0),
         ];
         const PIXELATE: &[ParamSpec] = &[p("size", "% of height", 2.0, 0.0, 30.0, 0.0)];
+        const BALANCE: &[ParamSpec] = &[
+            p("lift_r", "", 0.0, -1.0, 1.0, 0.0),
+            p("lift_g", "", 0.0, -1.0, 1.0, 0.0),
+            p("lift_b", "", 0.0, -1.0, 1.0, 0.0),
+            p("gamma_r", "", 0.0, -1.0, 1.0, 0.0),
+            p("gamma_g", "", 0.0, -1.0, 1.0, 0.0),
+            p("gamma_b", "", 0.0, -1.0, 1.0, 0.0),
+            p("gain_r", "", 0.0, -1.0, 1.0, 0.0),
+            p("gain_g", "", 0.0, -1.0, 1.0, 0.0),
+            p("gain_b", "", 0.0, -1.0, 1.0, 0.0),
+            p("offset_r", "", 0.0, -1.0, 1.0, 0.0),
+            p("offset_g", "", 0.0, -1.0, 1.0, 0.0),
+            p("offset_b", "", 0.0, -1.0, 1.0, 0.0),
+        ];
+        const CURVE: &[ParamSpec] = &[
+            p("low", "", 0.25, 0.0, 1.0, 0.25),
+            p("mid", "", 0.5, 0.0, 1.0, 0.5),
+            p("high", "", 0.75, 0.0, 1.0, 0.75),
+        ];
         match self {
             Kind::Brightness => BRIGHTNESS,
             Kind::Contrast => CONTRAST,
@@ -146,6 +173,8 @@ impl Kind {
             Kind::Sharpen => SHARPEN,
             Kind::Vignette => VIGNETTE,
             Kind::Pixelate => PIXELATE,
+            Kind::Balance => BALANCE,
+            Kind::Curve => CURVE,
         }
     }
 
@@ -225,6 +254,8 @@ pub fn apply(kind: Kind, values: &[f64], rgba: &mut [u8], w: usize, h: usize) {
         Kind::Sharpen => blur::sharpen(rgba, w, h, v[0] / 100.0, v[1] / 100.0 * h as f64),
         Kind::Vignette => colour::vignette(rgba, w, h, v[0] / 100.0, v[1] / 100.0),
         Kind::Pixelate => blur::pixelate(rgba, w, h, v[0] / 100.0 * h as f64),
+        Kind::Balance => colour::balance(rgba, &v),
+        Kind::Curve => colour::luma_curve(rgba, v[0], v[1], v[2]),
     }
 }
 

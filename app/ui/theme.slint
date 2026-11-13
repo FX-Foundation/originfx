@@ -5,24 +5,65 @@ export global Settings {
     // 0 = System, 1 = Light, 2 = Dark
     in-out property <int> look: 0;
     out property <bool> dark: look == 2 || (look == 0 && Palette.color-scheme != ColorScheme.light);
+    // 0 Simple, 1 Guided, 2 Pro
+    in-out property <int> mode: 0;
+    out property <bool> pro: mode == 2;
+    in-out property <bool> hints: true;
+    in-out property <bool> reduce-motion: false;
+    // 0 frames, 1 seconds
+    in-out property <int> timecode-style: 0;
 }
 
 export global Theme {
     out property <color> page-bg: Settings.dark ? #0e0f11 : #f3f4f6;
     out property <color> panel-bg: Settings.dark ? #141519 : #ffffff;
     out property <color> card-bg: Settings.dark ? #141519 : #ffffff;
+    out property <color> card-2: Settings.dark ? #1a1b20 : #f7f8fa;
     out property <color> input-bg: Settings.dark ? #101115 : #ffffff;
+    out property <color> well: Settings.dark ? #0a0b0d : #e9eaed;
     out property <color> border: Settings.dark ? #2b2c30 : #d7d8da;
+    out property <color> border-soft: Settings.dark ? #1f2024 : #e6e7e9;
     out property <color> control-border: Settings.dark ? #2b2c30 : #bdbec2;
     out property <color> button-border: Settings.dark ? #3a3c42 : #bdbec2;
     out property <color> text: Settings.dark ? #f4f5f9 : #08090d;
     out property <color> text-2: Settings.dark ? #b0b1b5 : #3c3d41;
     out property <color> muted: Settings.dark ? #979a9f : #585b5f;
+    out property <color> faint: Settings.dark ? #5c5f66 : #9a9da3;
     out property <color> accent: Settings.dark ? #2e8cff : #1f6fe2;
+    out property <color> accent-soft: Settings.dark ? #2e8cff22 : #1f6fe21a;
     out property <color> on-accent: #ffffff;
     out property <color> progress-off: Settings.dark ? #3a3d44 : #bbbec3;
     out property <color> badge-bg: Settings.dark ? #182b3a : #e8eefa;
     out property <color> checkbox-border: Settings.dark ? #3a3d44 : #9a9da3;
     out property <color> gold: Settings.dark ? #d9a92e : #c99a24;
     out property <color> hover: Settings.dark ? #ffffff10 : #00000008;
+    out property <color> selected-row: Settings.dark ? #1b2a3d : #e3ecfa;
+    out property <color> success: #22c47a;
+    out property <color> warning: #e6a500;
+    out property <color> danger: #e5484d;
+    out property <color> overlay: Settings.dark ? #00000099 : #0000004d;
+
+    // timeline
+    out property <color> timeline-bg: Settings.dark ? #0b0c0e : #eceef1;
+    out property <color> track-bg: Settings.dark ? #121317 : #f7f8fa;
+    out property <color> ruler-text: Settings.dark ? #7d8087 : #6b6e74;
+    out property <color> playhead: Settings.dark ? #2e8cff : #1f6fe2;
+    out property <color> clip-video: Settings.dark ? #1d2f4a : #c9dbf7;
+    out property <color> clip-video-border: Settings.dark ? #3a5e95 : #7ea3dd;
+    out property <color> clip-audio: Settings.dark ? #163a33 : #cfeee3;
+    out property <color> clip-audio-border: Settings.dark ? #2f8a6e : #58b58f;
+    out property <color> clip-title: Settings.dark ? #3d3418 : #f4e7b8;
+    out property <color> clip-title-border: Settings.dark ? #8a7429 : #cfae3c;
+    out property <color> clip-overlay: Settings.dark ? #2d2446 : #e3dbf6;
+    out property <color> clip-overlay-border: Settings.dark ? #6a4fb3 : #9b84d6;
+    out property <color> clip-selected: Settings.dark ? #ffffff : #08090d;
+    out property <color> waveform: Settings.dark ? #46d39a : #1f9b68;
+
+    // library / effects tile tints
+    out property <color> tint-title: Settings.dark ? #3d3418 : #f1e4b5;
+    out property <color> tint-transition: Settings.dark ? #2d2446 : #e3dbf6;
+    out property <color> tint-effect: Settings.dark ? #2d2446 : #e3dbf6;
+    out property <color> tint-music: Settings.dark ? #163a33 : #cfeee3;
+    out property <color> tint-sfx: Settings.dark ? #163a33 : #cfeee3;
+    out property <color> tint-overlay: Settings.dark ? #1d2f4a : #c9dbf7;
 }

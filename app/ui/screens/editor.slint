@@ -1,0 +1,670 @@
+// Section C: the editor, Simple and Pro layouts over one timeline.
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen, AssetItem, ClipItem, TrackItem, MarkerItem } from "../store.slint";
+import { Brand, Icon, PrimaryButton, GhostButton, Segmented, SegItem, TabBar, IconButton, ToolButton, HSlider, TextField, SectionLabel, Chip, Tile, Card, Placeholder, Divider, Dropdown, SummaryRow, Hint, ValueBox } from "../components.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// ---------- shared pieces ----------
+
+export component NumField inherits Rectangle {
+    in property <float> value;
+    in property <string> suffix;
+    in property <int> decimals: 0;
+    in property <bool> enabled: true;
+    callback changed(float);
+    property <string> shown: (root.decimals == 0 ? Math.round(root.value) : Math.round(root.value * 100) / 100) + root.suffix;
+    height: 26px;
+    width: 72px;
+    border-width: 1px;
+    border-color: inp.has-focus ? Theme.accent : Theme.control-border;
+    background: Theme.input-bg;
+    border-radius: 2px;
+    opacity: enabled ? 1 : 0.5;
+    inp := TextInput {
+        x: 6px; width: parent.width - 12px; height: parent.height;
+        vertical-alignment: center; horizontal-alignment: right;
+        text: root.shown;
+        color: Theme.text; font-size: 12px; single-line: true;
+        enabled: root.enabled;
+        selection-background-color: Theme.accent;
+        accepted => {
+            if (self.text.is-float()) { root.changed(self.text.to-float()); }
+            self.text = root.shown;
+            self.clear-focus();
+        }
+        changed has-focus => { if (!self.has-focus) { self.text = root.shown; } }
+    }
+}
+
+export component KVField inherits Rectangle {
+    in property <string> label;
+    in property <float> value;
+    in property <string> suffix;
+    in property <int> decimals: 0;
+    in property <bool> enabled: true;
+    callback changed(float);
+    height: 30px;
+    Text { x: 0px; height: parent.height; vertical-alignment: center; text: root.label; color: Theme.text-2; font-size: 12px; }
+    NumField { x: parent.width - self.width; y: 2px; value: root.value; suffix: root.suffix; decimals: root.decimals; enabled: root.enabled; changed(v) => { root.changed(v); } }
+}
+
+// Timeline clip
+component ClipView inherits Rectangle {
+    in property <ClipItem> cv;
+    in property <int> track-id;
+    in property <int> track-index;
+    in property <int> kind;         // 0 video 1 audio
+    in property <float> zoom;
+    in property <float> scroll;
+    in property <bool> locked;
+    property <bool> sel: cv.selected;
+    property <length> drag-dx: 0px;
+    property <int> drag-mode: 0;   // 0 none, 1 move, 2 head, 3 tail
+    property <float> frame: 1 / max(Model.fps, 1);
+    x: (cv.start - scroll) * zoom * 1px + (drag-mode == 1 || drag-mode == 2 ? drag-dx : 0px);
+    width: max(2px, cv.duration * zoom * 1px + (drag-mode == 3 ? drag-dx : (drag-mode == 2 ? -drag-dx : 0px)));
+    height: 34px;
+    y: 5px;
+    border-radius: 2px;
+    border-width: sel ? 2px : 1px;
+    border-color: sel ? Theme.clip-selected : (cv.kind == 1 ? Theme.clip-audio-border : cv.kind == 2 ? Theme.clip-title-border : cv.kind == 3 ? Theme.clip-overlay-border : Theme.clip-video-border);
+    background: cv.offline ? #ff00ff55 : (cv.kind == 1 ? Theme.clip-audio : cv.kind == 2 ? Theme.clip-title : cv.kind == 3 ? Theme.clip-overlay : Theme.clip-video);
+    opacity: cv.enabled ? 1 : 0.45;
+    clip: true;
+    if root.cv.has-waveform: Image {
+        x: 2px; y: 14px; width: parent.width - 4px; height: parent.height - 16px;
+        source: root.cv.waveform; image-fit: fill; colorize: Theme.waveform;
+    }
+    if root.cv.transition-secs > 0: Rectangle {
+        x: 0px; y: 0px; width: root.cv.transition-secs * root.zoom * 1px; height: parent.height;
+        background: Theme.text.with-alpha(0.12);
+        Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.text.with-alpha(0.5); }
+    }
+    Text {
+        x: 7px + (root.cv.transition-secs > 0 ? root.cv.transition-secs * root.zoom * 1px : 0px); y: 2px;
+        width: parent.width - 12px; overflow: elide;
+        text: root.cv.name + (root.cv.speed != 1 ? "  " + Math.round(root.cv.speed * 100) + "%" : "");
+        color: Theme.text; font-size: 10.5px;
+    }
+    ta := TouchArea {
+        enabled: !root.locked;
+        mouse-cursor: Model.tool == 2 ? crosshair : (self.mouse-x < 8px || self.mouse-x > root.width - 8px ? ew-resize : (self.pressed ? grabbing : grab));
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                if (Model.tool == 2) {
+                    Backend.seek(root.cv.start + self.mouse-x / (root.zoom * 1px));
+                    Backend.select-clip(root.track-id, root.cv.id);
+                    Backend.split-at-playhead();
+                    return;
+                }
+                if (!root.cv.selected) { Backend.select-clip(root.track-id, root.cv.id); }
+                root.drag-mode = self.mouse-x < 8px ? 2 : (self.mouse-x > root.width - 8px ? 3 : 1);
+                root.drag-dx = 0px;
+            }
+            if (e.kind == PointerEventKind.move && self.pressed && root.drag-mode > 0) {
+                root.drag-dx = self.mouse-x - self.pressed-x;
+            }
+            if (e.kind == PointerEventKind.up && root.drag-mode > 0) {
+                if (abs(root.drag-dx / 1px) >= 2) {
+                    if (root.drag-mode == 1) { Backend.move-clip(root.cv.id, root.drag-dx / (root.zoom * 1px), 0); }
+                    if (root.drag-mode == 2) { Backend.trim-clip(root.cv.id, 0, root.drag-dx / (root.zoom * 1px), Model.tool == 1); }
+                    if (root.drag-mode == 3) { Backend.trim-clip(root.cv.id, 1, root.drag-dx / (root.zoom * 1px), Model.tool == 1); }
+                }
+                root.drag-mode = 0;
+                root.drag-dx = 0px;
+            }
+        }
+        double-clicked => { Backend.open-tool(Screen.trim); }
+    }
+}
+
+component TrackHeader inherits Rectangle {
+    in property <TrackItem> track;
+    in property <string> label;
+    in property <bool> pro: true;
+    height: 44px;
+    background: Theme.track-bg;
+    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border-soft; }
+    Text { x: 12px; height: parent.height; vertical-alignment: center; text: root.label; color: root.track.kind == 0 ? Theme.accent : Theme.success; font-size: 11px; font-weight: 500; }
+    if root.pro: HorizontalLayout {
+        x: parent.width - 78px; height: parent.height; spacing: 4px; alignment: start;
+        IconButton { y: 12px; size: 20px; icon-size: 11px; bordered: false; icon: root.track.enabled ? @image-url("../icons/eye.svg") : @image-url("../icons/eye-off.svg"); tint: root.track.enabled ? Theme.muted : Theme.danger; hint: root.track.kind == 0 ? "Show or hide" : "Mute"; clicked => { Backend.toggle-track-enabled(root.track.id); } }
+        IconButton { y: 12px; size: 20px; icon-size: 11px; bordered: false; icon: root.track.locked ? @image-url("../icons/lock.svg") : @image-url("../icons/unlock.svg"); tint: root.track.locked ? Theme.warning : Theme.muted; hint: "Lock"; clicked => { Backend.toggle-track-locked(root.track.id); } }
+        if root.track.kind == 1: IconButton { y: 12px; size: 20px; icon-size: 11px; bordered: false; icon: @image-url("../icons/headphones.svg"); tint: root.track.solo ? Theme.accent : Theme.muted; hint: "Solo"; clicked => { Backend.toggle-track-solo(root.track.id); } }
+    }
+}
+
+export component Timeline inherits Rectangle {
+    in property <bool> pro: true;
+    property <length> head-w: 100px;
+    property <length> ruler-h: 22px;
+    property <float> zoom: Model.zoom;
+    property <float> scroll: Model.scroll;
+    property <int> vcount: Model.video-tracks.length;
+    property <int> acount: Model.audio-tracks.length;
+    property <length> row-h: 44px;
+    property <float> secs-per-tick: zoom >= 160 ? 1 : zoom >= 80 ? 2 : zoom >= 40 ? 5 : zoom >= 16 ? 15 : zoom >= 6 ? 30 : 60;
+    property <float> visible-secs: (root.width - head-w) / (zoom * 1px);
+    background: Theme.timeline-bg;
+    // Wheel: scroll the timeline; Ctrl+wheel zooms. Sits under everything so clicks reach the clips.
+    TouchArea {
+        x: head-w; y: 0px; width: parent.width - head-w; height: parent.height;
+        scroll-event(e) => {
+            if (e.modifiers.control) {
+                Backend.zoom-changed(clamp(root.zoom * (e.delta-y > 0 ? 1.15 : 0.87), 2, 400));
+            } else {
+                Model.scroll = max(0, root.scroll - (e.delta-y + e.delta-x) / (root.zoom * 1px));
+            }
+            return accept;
+        }
+    }
+    function tc(s: float) -> string {
+        return (floor(s / 60) < 10 ? "0" : "") + floor(s / 60) + ":" + (mod(floor(s), 60) < 10 ? "0" : "") + mod(floor(s), 60);
+    }
+    function label(i: int, kind: int) -> string {
+        if (root.pro) { return (kind == 0 ? "V" : "A") + (kind == 0 ? root.vcount - i : i + 1); }
+        return kind == 0 ? Model.video-tracks[root.vcount - 1 - i].name : Model.audio-tracks[i].name;
+    }
+    // ruler
+    Rectangle {
+        x: head-w; y: 0px; width: parent.width - head-w; height: ruler-h; clip: true;
+        background: Theme.track-bg;
+        for i in ceil(root.visible-secs / root.secs-per-tick) + 2: Rectangle {
+            property <float> t: (floor(root.scroll / root.secs-per-tick) + i) * root.secs-per-tick;
+            x: (t - root.scroll) * root.zoom * 1px;
+            width: 1px; height: parent.height; background: Theme.border;
+            Text { x: 4px; y: 3px; text: root.tc(t); color: Theme.ruler-text; font-size: 9.5px; }
+        }
+        for m in Model.markers: Rectangle {
+            x: (m.time - root.scroll) * root.zoom * 1px - 5px; y: 10px; width: 10px; height: 12px;
+            Icon { source: @image-url("../icons/marker.svg"); tint: m.colour == 1 ? Theme.success : m.colour == 2 ? Theme.danger : Theme.gold; width: 10px; height: 12px; }
+            TouchArea { mouse-cursor: pointer; clicked => { Backend.seek(m.time); } double-clicked => { Backend.remove-marker(m.id); } }
+        }
+        if Model.in-point >= 0 && Model.out-point > Model.in-point: Rectangle {
+            x: (Model.in-point - root.scroll) * root.zoom * 1px; y: parent.height - 3px;
+            width: (Model.out-point - Model.in-point) * root.zoom * 1px; height: 3px; background: Theme.accent;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down || (e.kind == PointerEventKind.move && self.pressed)) {
+                    Backend.seek(max(0, root.scroll + self.mouse-x / (root.zoom * 1px)));
+                }
+            }
+        }
+    }
+    Rectangle { x: 0px; y: 0px; width: head-w; height: ruler-h; background: Theme.track-bg;
+        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border; } }
+    Rectangle { x: head-w; y: ruler-h - 1px; width: parent.width - head-w; height: 1px; background: Theme.border; }
+    // tracks
+    tracks := ScrollView {
+        x: 0px; y: ruler-h; width: parent.width; height: parent.height - ruler-h;
+        content-width: self.width;
+        content-height: max(self.height, (root.vcount + root.acount) * root.row-h + 20px);
+        VerticalLayout {
+            alignment: start;
+            for i in root.vcount: Rectangle {
+                property <TrackItem> t: Model.video-tracks[root.vcount - 1 - i];
+                height: root.row-h;
+                TrackHeader { x: 0px; width: root.head-w; track: t; label: root.label(i, 0); pro: root.pro; }
+                Rectangle {
+                    x: root.head-w; width: parent.width - root.head-w; height: parent.height; clip: true;
+                    background: Model.selected-track == t.id ? Theme.hover : transparent;
+                    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border-soft; }
+                    TouchArea {
+                        clicked => { Backend.clear-selection(); Model.selected-track = t.id; Backend.seek(max(0, root.scroll + self.mouse-x / (root.zoom * 1px))); }
+                    }
+                    for c in t.clips: ClipView { cv: c; track-id: t.id; track-index: i; kind: 0; zoom: root.zoom; scroll: root.scroll; locked: t.locked; }
+                }
+            }
+            for i in root.acount: Rectangle {
+                property <TrackItem> t: Model.audio-tracks[i];
+                height: root.row-h;
+                TrackHeader { x: 0px; width: root.head-w; track: t; label: root.label(i, 1); pro: root.pro; }
+                Rectangle {
+                    x: root.head-w; width: parent.width - root.head-w; height: parent.height; clip: true;
+                    background: Model.selected-track == t.id ? Theme.hover : transparent;
+                    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border-soft; }
+                    TouchArea {
+                        clicked => { Backend.clear-selection(); Model.selected-track = t.id; Backend.seek(max(0, root.scroll + self.mouse-x / (root.zoom * 1px))); }
+                    }
+                    for c in t.clips: ClipView { cv: c; track-id: t.id; track-index: i; kind: 1; zoom: root.zoom; scroll: root.scroll; locked: t.locked; }
+                }
+            }
+        }
+    }
+    // playhead
+    Rectangle {
+        x: head-w + (Model.playhead - root.scroll) * root.zoom * 1px; y: 0px; width: 2px; height: parent.height;
+        background: Theme.playhead;
+        visible: Model.playhead >= root.scroll;
+        Rectangle { x: -5px; y: 0px; width: 12px; height: 8px; background: Theme.playhead; }
+    }
+}
+
+// Simple mode media bin
+component BinTile inherits Rectangle {
+    in property <AssetItem> a;
+    callback clicked;
+    callback add;
+    height: 96px;
+    background: Theme.card-bg;
+    border-width: a.selected ? 2px : 1px;
+    border-color: a.selected ? Theme.accent : Theme.border;
+    Rectangle {
+        x: 1px; y: 1px; width: parent.width - 2px; height: 62px; clip: true;
+        background: root.a.kind == 1 ? Theme.tint-music : root.a.kind == 3 ? Theme.tint-title : root.a.kind == 4 ? Theme.tint-overlay : Theme.well;
+        if root.a.has-thumb: Image { width: parent.width; height: parent.height; source: root.a.thumb; image-fit: cover; }
+        if !root.a.has-thumb: Icon { width: 16px; height: 16px; tint: Theme.muted; source: root.a.kind == 1 ? @image-url("../icons/music.svg") : root.a.kind == 2 ? @image-url("../icons/image.svg") : root.a.kind == 3 ? @image-url("../icons/type.svg") : root.a.kind == 4 ? @image-url("../icons/shapes.svg") : @image-url("../icons/film.svg"); }
+    }
+    Text { x: 8px; y: 68px; width: parent.width - 16px; overflow: elide; text: root.a.name; color: Theme.text; font-size: 10.5px; }
+    Text { x: 8px; y: 81px; text: root.a.duration; color: Theme.muted; font-size: 9.5px; }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } double-clicked => { root.add(); } }
+}
+
+component PreviewMonitor inherits Rectangle {
+    in property <image> frame;
+    in property <bool> has-frame: false;
+    in property <float> aspect: Model.seq-width / max(Model.seq-height, 1);
+    background: Theme.well;
+    border-width: 1px;
+    border-color: Theme.border;
+    Rectangle {
+        width: min(parent.width - 2px, (parent.height - 2px) * root.aspect);
+        height: min(parent.height - 2px, (parent.width - 2px) / root.aspect);
+        background: #000000;
+        if root.has-frame: Image { width: parent.width; height: parent.height; source: root.frame; image-fit: contain; }
+        if !root.has-frame: Icon { width: 22px; height: 22px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+    }
+}
+
+component Transport inherits HorizontalLayout {
+    spacing: 6px;
+    alignment: center;
+    IconButton { icon: @image-url("../icons/skip-back.svg"); hint: "Back one frame (←)"; clicked => { Backend.step(-1); } }
+    IconButton { icon: Model.playing ? @image-url("../icons/pause.svg") : @image-url("../icons/play.svg"); active: true; width: 40px; hint: "Play / Pause (Space)"; clicked => { Backend.play-pause(); } }
+    IconButton { icon: @image-url("../icons/skip-forward.svg"); hint: "Forward one frame (→)"; clicked => { Backend.step(1); } }
+    IconButton { icon: @image-url("../icons/flag.svg"); hint: "Add marker (M)"; clicked => { Backend.add-marker(); } }
+}
+
+component ToolsMenu inherits Rectangle {
+    callback picked(Screen);
+    property <[string]> names: ["Precision trim", "Transitions", "Speed and retime", "Multicam", "Titles", "Keyframes", "Shapes and masks", "Composition", "Color", "Color grading", "Scopes", "Effects", "Mixer", "Audio cleanup", "Voiceover", "Import media", "Media inspector", "Proxy and cache", "Project interchange", "Project settings", "Export"];
+    width: 200px;
+    background: Theme.panel-bg; border-width: 1px; border-color: Theme.border; border-radius: 2px;
+    VerticalLayout {
+        padding: 4px;
+        for n[i] in root.names: Rectangle {
+            height: 26px; border-radius: 2px; background: mta.has-hover ? Theme.hover : transparent;
+            Text { x: 8px; height: parent.height; vertical-alignment: center; text: n; color: Theme.text; font-size: 12px; }
+            mta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.picked(i == 0 ? Screen.trim : i == 1 ? Screen.transitions : i == 2 ? Screen.speed : i == 3 ? Screen.multicam : i == 4 ? Screen.titles : i == 5 ? Screen.keyframes : i == 6 ? Screen.masks : i == 7 ? Screen.composition : i == 8 ? Screen.color : i == 9 ? Screen.grading : i == 10 ? Screen.scopes : i == 11 ? Screen.effects : i == 12 ? Screen.mixer : i == 13 ? Screen.audio-cleanup : i == 14 ? Screen.voiceover : i == 15 ? Screen.import : i == 16 ? Screen.inspector : i == 17 ? Screen.proxy : i == 18 ? Screen.interchange : i == 19 ? Screen.project-settings : Screen.export);
+                }
+            }
+        }
+    }
+}
+
+export component EditorScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <bool> pro: Settings.pro;
+    property <length> timeline-h: max(240px, root.height * 0.36);
+    property <length> top-h: root.height - timeline-h;
+    property <[string]> blend-names: ["Normal", "Multiply", "Screen", "Overlay", "Soft light", "Darken", "Lighten", "Difference"];
+
+    // ---------- top bar ----------
+    Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: 44px; background: Theme.panel-bg;
+        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border; }
+        Brand { x: 16px; y: 12px; small: true; }
+        Rectangle { x: 162px; y: 13px; width: 1px; height: 18px; background: Theme.border; }
+        Rectangle {
+            x: 176px; height: parent.height; width: pn.preferred-width + 8px;
+            pn := Text { height: parent.height; vertical-alignment: center; text: Model.project-name + (Model.dirty ? " •" : ""); color: Theme.text-2; font-size: 12px; }
+            home-ta := TouchArea { mouse-cursor: pointer; clicked => { Backend.go(Screen.home); } }
+            Hint { text: "Back to Home"; show: home-ta.has-hover; y: 40px; }
+        }
+        if root.pro: TabBar {
+            x: (parent.width - self.width) / 2; y: 4px;
+            items: ["Edit", "Color", "Audio", "Effects"];
+            current <=> Model.editor-tab;
+        }
+        if !root.pro: Segmented {
+            x: (parent.width - self.width) / 2; y: 7px; small: true;
+            items: ["Simple", "Pro"]; current: 0;
+            changed(i) => { Backend.set-mode(i == 1 ? 2 : 0); }
+        }
+        HorizontalLayout {
+            x: parent.width - 560px - 16px; width: 560px; alignment: end; y: 7px; height: 30px; spacing: 8px;
+            if root.pro: Segmented { small: true; items: ["Simple", "Pro"]; current: 1; changed(i) => { Backend.set-mode(i == 1 ? 2 : 0); } }
+            IconButton { icon: @image-url("../icons/undo.svg"); enabled: Model.can-undo; hint: Model.can-undo ? "Undo " + Model.undo-label + " (Ctrl+Z)" : "Nothing to undo"; clicked => { Backend.undo(); } }
+            IconButton { icon: @image-url("../icons/redo.svg"); enabled: Model.can-redo; hint: Model.can-redo ? "Redo " + Model.redo-label + " (Ctrl+Shift+Z)" : "Nothing to redo"; clicked => { Backend.redo(); } }
+            GhostButton { small: true; text: "Tools"; has-icon: true; icon: @image-url("../icons/chevron-down.svg"); clicked => { tools.show(); } }
+            GhostButton { small: true; text: "Save"; hint: "Save project (Ctrl+S)"; clicked => { Backend.save-project(); } }
+            PrimaryButton { small: true; text: "Export"; has-icon: true; icon: @image-url("../icons/upload.svg"); hint: "Export (Ctrl+E)"; clicked => { Backend.open-tool(Screen.export); } }
+        }
+    }
+
+    tools := PopupWindow {
+        x: parent.width - 330px; y: 38px;
+        ToolsMenu { picked(s) => { Backend.open-tool(s); } }
+    }
+
+    // ---------- lesson / hint banner ----------
+    if Model.hint-banner != "": Rectangle {
+        x: 0px; y: 44px; width: parent.width; height: 30px; background: Theme.badge-bg;
+        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border; }
+        Icon { x: 16px; width: 13px; height: 13px; source: @image-url("../icons/book.svg"); tint: Theme.accent; }
+        Text { x: 38px; width: parent.width - 160px; height: parent.height; vertical-alignment: center; overflow: elide; text: Model.hint-banner; color: Theme.text; font-size: 12px; }
+        GhostButton { x: parent.width - 108px; y: 3px; height: 24px; small: true; text: "Done"; clicked => { Model.hint-banner = ""; Backend.setting-changed("lesson-done", ""); } }
+        IconButton { x: parent.width - 32px; y: 3px; size: 24px; bordered: false; icon: @image-url("../icons/x.svg"); clicked => { Model.hint-banner = ""; } }
+    }
+    property <length> body-y: Model.hint-banner != "" ? 74px : 44px;
+
+    // ---------- Simple layout ----------
+    if !root.pro: Rectangle {
+        x: 0px; y: root.body-y; width: parent.width; height: root.top-h - root.body-y;
+        // media bin
+        Rectangle {
+            x: 0px; y: 0px; width: 240px; height: parent.height; background: Theme.panel-bg;
+            Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+            Segmented { x: 10px; y: 12px; small: true; items: ["Media", "Titles", "Music", "Effects"]; current <=> Model.bin-tab; }
+            ScrollView {
+                x: 10px; y: 52px; width: parent.width - 20px; height: parent.height - 52px - 52px;
+                content-width: self.width;
+                if Model.bin-tab == 0: VerticalLayout {
+                    spacing: 0px;
+                    property <length> cw: (self.width - 8px) / 2;
+                    Rectangle {
+                        height: ceil(Model.assets.length / 2) * 104px;
+                        for a[i] in Model.assets: BinTile {
+                            x: mod(i, 2) * (cw + 8px); y: floor(i / 2) * 104px; width: cw; a: a;
+                            clicked => { Backend.inspect-asset(a.id); }
+                            add => { Backend.insert-asset-at-playhead(a.id); }
+                        }
+                    }
+                    if Model.assets.length == 0: Text { text: "No media yet. Import some, then double-click a clip to add it at the playhead."; color: Theme.muted; font-size: 11.5px; wrap: word-wrap; }
+                }
+                if Model.bin-tab == 1: VerticalLayout {
+                    spacing: 8px;
+                    for t[i] in ["Lower third · Bar", "Lower third · Minimal", "Title · Centered", "Title · Split"]: Rectangle {
+                        height: 56px; background: Theme.card-bg; border-width: 1px; border-color: Theme.border;
+                        Rectangle { x: 10px; y: 12px; width: 44px; height: 32px; background: Theme.tint-title; Icon { width: 12px; height: 12px; source: @image-url("../icons/type.svg"); tint: Theme.text; } }
+                        Text { x: 64px; height: parent.height; vertical-alignment: center; text: t; color: Theme.text; font-size: 11.5px; }
+                        TouchArea { mouse-cursor: pointer; clicked => { Model.title-template = i; Backend.open-tool(Screen.titles); } }
+                    }
+                    Text { text: "Pick a style, then write your words."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                }
+                if Model.bin-tab == 2: VerticalLayout {
+                    spacing: 0px;
+                    property <length> cw: (self.width - 8px) / 2;
+                    Rectangle {
+                        height: ceil(Model.assets.length / 2) * 104px;
+                        for a[i] in Model.assets: BinTile {
+                            visible: a.kind == 1;
+                            x: mod(i, 2) * (cw + 8px); y: floor(i / 2) * 104px; width: cw; a: a;
+                            clicked => { Backend.inspect-asset(a.id); }
+                            add => { Backend.insert-asset-at-playhead(a.id); }
+                        }
+                    }
+                    Text { text: "Sound files in your project. Double-click to add at the playhead."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                }
+                if Model.bin-tab == 3: VerticalLayout {
+                    spacing: 8px;
+                    for e[i] in ["Blur", "Sharpen", "Vignette", "Grayscale", "Sepia", "Pixelate", "Invert"]: Rectangle {
+                        height: 40px; background: Theme.card-bg; border-width: 1px; border-color: Theme.border;
+                        Rectangle { x: 10px; y: 8px; width: 24px; height: 24px; background: Theme.tint-effect; Icon { width: 11px; height: 11px; source: @image-url("../icons/wand.svg"); tint: Theme.text; } }
+                        Text { x: 44px; height: parent.height; vertical-alignment: center; text: e; color: Theme.text; font-size: 11.5px; }
+                        TouchArea { mouse-cursor: pointer; clicked => { Backend.add-effect(i == 0 ? 10 : i == 1 ? 11 : i == 2 ? 12 : i == 3 ? 8 : i == 4 ? 9 : i == 5 ? 13 : 7); } }
+                    }
+                    Text { text: Model.selected.valid ? "Click an effect to add it to the selected clip." : "Select a clip first."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                }
+            }
+            GhostButton { x: 10px; y: parent.height - 44px; width: parent.width - 20px; height: 34px; text: "Import media"; has-icon: true; icon: @image-url("../icons/download.svg"); clicked => { Backend.open-tool(Screen.import); } }
+        }
+        // preview
+        Rectangle {
+            x: 240px; y: 0px; width: parent.width - 240px - 210px; height: parent.height;
+            PreviewMonitor { x: 44px; y: 38px; width: parent.width - 88px; height: parent.height - 38px - 82px; frame: Model.preview; has-frame: Model.has-preview; }
+            Text { x: 44px; y: parent.height - 56px; height: 30px; vertical-alignment: center; text: Model.playhead-text + "  /  " + Model.duration-text; color: Theme.text-2; font-size: 12px; }
+            Transport { x: (parent.width - self.preferred-width) / 2; y: parent.height - 56px; height: 30px; }
+        }
+        // right panel
+        Rectangle {
+            x: parent.width - 210px; y: 0px; width: 210px; height: parent.height; background: Theme.panel-bg;
+            Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            VerticalLayout {
+                x: 14px; y: 16px; width: parent.width - 28px; spacing: 10px; alignment: start;
+                SectionLabel { text: "Selected clip"; }
+                if Model.selected.valid: VerticalLayout {
+                    spacing: 10px;
+                    Text { text: Model.selected.name; color: Theme.text; font-size: 13px; font-weight: 500; overflow: elide; }
+                    Text { text: Model.selected.asset-meta; color: Theme.muted; font-size: 11px; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ToolButton { icon: @image-url("../icons/scissors.svg"); text: "Split"; hint: "Cut the clip at the playhead (K)"; clicked => { Backend.split-at-playhead(); } }
+                        ToolButton { icon: @image-url("../icons/trash.svg"); text: "Delete"; hint: "Remove the clip (Delete)"; clicked => { Backend.delete-selected(); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ToolButton { icon: @image-url("../icons/zap.svg"); text: "Speed"; clicked => { Backend.open-tool(Screen.speed); } }
+                        ToolButton { icon: @image-url("../icons/type.svg"); text: "Add title"; clicked => { Backend.open-tool(Screen.titles); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ToolButton { icon: @image-url("../icons/wand.svg"); text: "Transition"; clicked => { Backend.open-tool(Screen.transitions); } }
+                        ToolButton { icon: @image-url("../icons/palette.svg"); text: "Color"; clicked => { Backend.open-tool(Screen.color); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ToolButton { icon: @image-url("../icons/sparkle.svg"); text: "Effects"; clicked => { Backend.open-tool(Screen.effects); } }
+                        ToolButton { icon: @image-url("../icons/crosshair.svg"); text: "Trim"; clicked => { Backend.open-tool(Screen.trim); } }
+                    }
+                    if Model.selected.kind == 1: VerticalLayout {
+                        spacing: 6px;
+                        HorizontalLayout {
+                            Text { text: "Volume"; color: Theme.text; font-size: 12px; }
+                            Rectangle { }
+                            Text { text: Math.round(Math.pow(10, Model.selected.volume / 20) * 100) + "%"; color: Theme.muted; font-size: 11px; }
+                        }
+                        HSlider { minimum: -60; maximum: 12; value: Model.selected.volume; show-value: false; released => { Backend.set-clip-volume(self.value); } }
+                    }
+                    if Model.selected.kind != 1: VerticalLayout {
+                        spacing: 6px;
+                        HorizontalLayout {
+                            Text { text: "Opacity"; color: Theme.text; font-size: 12px; }
+                            Rectangle { }
+                            Text { text: Math.round(Model.selected.opacity) + "%"; color: Theme.muted; font-size: 11px; }
+                        }
+                        HSlider { minimum: 0; maximum: 100; value: Model.selected.opacity; show-value: false; released => { Backend.set-transform("opacity", self.value); } }
+                    }
+                }
+                if !Model.selected.valid: Text { text: "Click a clip on the timeline to see what you can do with it."; color: Theme.muted; font-size: 11.5px; wrap: word-wrap; }
+            }
+            GhostButton { x: 14px; y: parent.height - 48px; width: parent.width - 28px; height: 34px; text: "Mixer"; has-icon: true; icon: @image-url("../icons/mix.svg"); clicked => { Backend.open-tool(Screen.mixer); } }
+        }
+    }
+
+    // ---------- Pro layout ----------
+    if root.pro: Rectangle {
+        x: 0px; y: root.body-y; width: parent.width; height: root.top-h - root.body-y;
+        // project panel
+        Rectangle {
+            x: 0px; y: 0px; width: 210px; height: parent.height; background: Theme.panel-bg;
+            Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+            Segmented { x: 10px; y: 10px; small: true; items: ["Media", "Effects", "Titles"]; current: Model.bin-tab == 3 ? 1 : Model.bin-tab == 1 ? 2 : 0; changed(i) => { Model.bin-tab = i == 1 ? 3 : i == 2 ? 1 : 0; } }
+            HorizontalLayout { x: 10px; y: 46px; width: parent.width - 20px; height: 18px;
+                SectionLabel { text: "Name"; } Rectangle { } SectionLabel { text: "Length"; } }
+            ScrollView {
+                x: 0px; y: 66px; width: parent.width; height: parent.height - 66px - 44px;
+                content-width: self.width;
+                if Model.bin-tab == 0: VerticalLayout {
+                    for a in Model.assets: Rectangle {
+                        height: 26px; background: a.selected ? Theme.selected-row : (ata.has-hover ? Theme.hover : transparent);
+                        Text { x: 10px; width: parent.width - 60px; height: parent.height; vertical-alignment: center; overflow: elide; text: a.name; color: Theme.text; font-size: 11.5px; }
+                        Text { x: parent.width - self.width - 10px; height: parent.height; vertical-alignment: center; text: a.duration; color: Theme.muted; font-size: 10.5px; }
+                        ata := TouchArea { mouse-cursor: pointer; clicked => { Backend.inspect-asset(a.id); } double-clicked => { Backend.insert-asset-at-playhead(a.id); } }
+                    }
+                }
+                if Model.bin-tab == 3: VerticalLayout {
+                    for e[i] in ["Brightness", "Contrast", "Exposure", "Gamma", "Saturation", "Hue", "Temperature", "Invert", "Grayscale", "Sepia", "Blur", "Sharpen", "Vignette", "Pixelate"]: Rectangle {
+                        height: 26px; background: eta.has-hover ? Theme.hover : transparent;
+                        Text { x: 10px; height: parent.height; vertical-alignment: center; text: e; color: Theme.text; font-size: 11.5px; }
+                        eta := TouchArea { mouse-cursor: pointer; double-clicked => { Backend.add-effect(i); } }
+                        Hint { text: "Double-click to add to the selected clip"; show: eta.has-hover; x: 10px; y: -28px; }
+                    }
+                }
+                if Model.bin-tab == 1: VerticalLayout {
+                    for t[i] in ["Lower third · Bar", "Lower third · Minimal", "Title · Centered", "Title · Split"]: Rectangle {
+                        height: 26px; background: tta.has-hover ? Theme.hover : transparent;
+                        Text { x: 10px; height: parent.height; vertical-alignment: center; text: t; color: Theme.text; font-size: 11.5px; }
+                        tta := TouchArea { mouse-cursor: pointer; clicked => { Model.title-template = i; Backend.open-tool(Screen.titles); } }
+                    }
+                }
+            }
+            GhostButton { x: 10px; y: parent.height - 38px; width: parent.width - 20px; height: 30px; small: true; text: "Import media"; has-icon: true; icon: @image-url("../icons/download.svg"); clicked => { Backend.open-tool(Screen.import); } }
+        }
+        // monitors
+        Rectangle {
+            x: 210px; y: 0px; width: parent.width - 210px - 220px; height: parent.height;
+            property <length> mw: (self.width - 48px) / 2;
+            SectionLabel { x: 16px; y: 14px; text: "Source"; }
+            Text { x: 16px + mw - 90px; y: 14px; width: 90px; horizontal-alignment: right; text: Model.inspector-pos-text; color: Theme.muted; font-size: 10.5px; }
+            PreviewMonitor { x: 16px; y: 36px; width: mw; height: parent.height - 36px - 56px; frame: Model.source-preview; has-frame: Model.has-source-preview; aspect: 16 / 9; }
+            HorizontalLayout {
+                x: 16px; y: parent.height - 44px; width: mw; height: 30px; spacing: 6px; alignment: center;
+                IconButton { icon: @image-url("../icons/skip-back.svg"); hint: "Back"; clicked => { Backend.inspector-seek(max(0, Model.inspector-pos - 1)); } }
+                IconButton { icon: @image-url("../icons/play.svg"); active: true; hint: "Open in Media inspector"; clicked => { Backend.open-tool(Screen.inspector); } }
+                IconButton { icon: @image-url("../icons/skip-forward.svg"); hint: "Forward"; clicked => { Backend.inspector-seek(Model.inspector-pos + 1); } }
+                IconButton { icon: @image-url("../icons/download.svg"); hint: "Insert at playhead"; clicked => { Backend.insert-asset-at-playhead(Model.inspector-asset); } }
+            }
+            SectionLabel { x: 32px + mw; y: 14px; text: "Program"; }
+            Text { x: 32px + 2 * mw - 90px; y: 14px; width: 90px; horizontal-alignment: right; text: Model.playhead-text; color: Theme.muted; font-size: 10.5px; }
+            PreviewMonitor { x: 32px + mw; y: 36px; width: mw; height: parent.height - 36px - 56px; frame: Model.preview; has-frame: Model.has-preview; }
+            Transport { x: 32px + mw; y: parent.height - 44px; width: mw; height: 30px; }
+        }
+        // inspector
+        Rectangle {
+            x: parent.width - 220px; y: 0px; width: 220px; height: parent.height; background: Theme.panel-bg;
+            Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            ScrollView {
+                x: 0px; y: 0px; width: parent.width; height: parent.height;
+                content-width: self.width;
+                VerticalLayout {
+                    padding: 12px; spacing: 8px; alignment: start;
+                    if Model.editor-tab == 0: Segmented { small: true; items: ["Video", "Audio", "Color"]; current <=> Model.inspector-tab; }
+                    Text { text: Model.selected.valid ? Model.selected.name : "No clip selected"; color: Theme.text; font-size: 12.5px; font-weight: 500; overflow: elide; }
+                    if Model.selected.valid && (Model.editor-tab == 0 && Model.inspector-tab == 0): VerticalLayout {
+                        spacing: 2px;
+                        SectionLabel { text: "Transform"; }
+                        KVField { label: "Position X"; value: Model.selected.pos-x; changed(v) => { Backend.set-transform("x", v); } }
+                        KVField { label: "Position Y"; value: Model.selected.pos-y; changed(v) => { Backend.set-transform("y", v); } }
+                        KVField { label: "Scale"; value: Model.selected.scale; suffix: "%"; changed(v) => { Backend.set-transform("scale", v); } }
+                        KVField { label: "Rotation"; value: Model.selected.rotation; suffix: "°"; changed(v) => { Backend.set-transform("rotation", v); } }
+                        Rectangle { height: 8px; }
+                        SectionLabel { text: "Composite"; }
+                        KVField { label: "Opacity"; value: Model.selected.opacity; suffix: "%"; changed(v) => { Backend.set-transform("opacity", v); } }
+                        Rectangle {
+                            height: 30px;
+                            Text { x: 0px; height: parent.height; vertical-alignment: center; text: "Blend mode"; color: Theme.text-2; font-size: 12px; }
+                            Dropdown { x: parent.width - self.width; y: 2px; width: 96px; height: 26px; items: root.blend-names; current: Model.selected.blend; changed(i) => { Backend.set-blend(i); } }
+                        }
+                        Rectangle { height: 8px; }
+                        SectionLabel { text: "Speed"; }
+                        KVField { label: "Speed"; value: Model.selected.speed * 100; suffix: "%"; changed(v) => { Backend.set-speed(v, Model.selected.reverse); } }
+                        Rectangle {
+                            height: 30px;
+                            Text { x: 0px; height: parent.height; vertical-alignment: center; text: "Direction"; color: Theme.text-2; font-size: 12px; }
+                            Dropdown { x: parent.width - self.width; y: 2px; width: 96px; height: 26px; items: ["Forward", "Reverse"]; current: Model.selected.reverse ? 1 : 0; changed(i) => { Backend.set-speed(Model.selected.speed * 100, i == 1); } }
+                        }
+                        Rectangle { height: 8px; }
+                        SectionLabel { text: "Clip"; }
+                        Rectangle {
+                            height: 30px;
+                            Text { x: 0px; height: parent.height; vertical-alignment: center; text: "Enabled"; color: Theme.text-2; font-size: 12px; }
+                            Dropdown { x: parent.width - self.width; y: 2px; width: 96px; height: 26px; items: ["On", "Off"]; current: Model.selected.kind >= 0 ? 0 : 1; changed(i) => { Backend.set-clip-enabled(i == 0); } }
+                        }
+                    }
+                    if Model.selected.valid && ((Model.editor-tab == 0 && Model.inspector-tab == 1) || Model.editor-tab == 2): VerticalLayout {
+                        spacing: 2px;
+                        SectionLabel { text: "Level"; }
+                        KVField { label: "Volume"; value: Model.selected.volume; suffix: " dB"; decimals: 1; changed(v) => { Backend.set-clip-volume(v); } }
+                        KVField { label: "Pan"; value: Model.selected.pan; changed(v) => { Backend.set-clip-pan(v); } }
+                        Rectangle { height: 8px; }
+                        SectionLabel { text: "Fades"; }
+                        KVField { label: "Fade in"; value: Model.selected.fade-in; suffix: " s"; decimals: 2; changed(v) => { Backend.set-clip-fades(v, Model.selected.fade-out); } }
+                        KVField { label: "Fade out"; value: Model.selected.fade-out; suffix: " s"; decimals: 2; changed(v) => { Backend.set-clip-fades(Model.selected.fade-in, v); } }
+                        Rectangle { height: 8px; }
+                        GhostButton { small: true; text: "Open Mixer"; clicked => { Backend.open-tool(Screen.mixer); } }
+                        GhostButton { small: true; text: "Audio cleanup"; clicked => { Backend.open-tool(Screen.audio-cleanup); } }
+                    }
+                    if Model.selected.valid && ((Model.editor-tab == 0 && Model.inspector-tab == 2) || Model.editor-tab == 1): VerticalLayout {
+                        spacing: 2px;
+                        SectionLabel { text: "Basic"; }
+                        KVField { label: "Temperature"; value: Model.temperature; changed(v) => { Backend.set-colour("temperature", v); } }
+                        KVField { label: "Exposure"; value: Model.exposure; decimals: 2; changed(v) => { Backend.set-colour("exposure", v); } }
+                        KVField { label: "Contrast"; value: Model.contrast; changed(v) => { Backend.set-colour("contrast", v); } }
+                        KVField { label: "Saturation"; value: Model.saturation; changed(v) => { Backend.set-colour("saturation", v); } }
+                        Rectangle { height: 8px; }
+                        GhostButton { small: true; text: "Color"; clicked => { Backend.open-tool(Screen.color); } }
+                        GhostButton { small: true; text: "Color grading"; clicked => { Backend.open-tool(Screen.grading); } }
+                        GhostButton { small: true; text: "Scopes"; clicked => { Backend.open-tool(Screen.scopes); } }
+                    }
+                    if Model.selected.valid && Model.editor-tab == 3: VerticalLayout {
+                        spacing: 4px;
+                        SectionLabel { text: "Effect stack"; }
+                        for e[i] in Model.selected.effects: Rectangle {
+                            height: 28px; background: Model.effect-selected == i ? Theme.selected-row : transparent;
+                            Text { x: 8px; width: parent.width - 60px; height: parent.height; vertical-alignment: center; overflow: elide; text: e.name; color: e.enabled ? Theme.text : Theme.muted; font-size: 12px; }
+                            IconButton { x: parent.width - 52px; y: 4px; size: 20px; icon-size: 11px; bordered: false; icon: e.enabled ? @image-url("../icons/eye.svg") : @image-url("../icons/eye-off.svg"); clicked => { Backend.toggle-effect(e.id, !e.enabled); } }
+                            IconButton { x: parent.width - 26px; y: 4px; size: 20px; icon-size: 11px; bordered: false; icon: @image-url("../icons/x.svg"); clicked => { Backend.remove-effect(e.id); } }
+                            TouchArea { width: parent.width - 60px; clicked => { Model.effect-selected = i; } }
+                        }
+                        if Model.selected.effects.length == 0: Text { text: "No effects. Double-click one in the Effects list on the left."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                        if Model.effect-selected >= 0 && Model.effect-selected < Model.selected.effects.length: VerticalLayout {
+                            spacing: 2px;
+                            Rectangle { height: 6px; }
+                            SectionLabel { text: Model.selected.effects[Model.effect-selected].name; }
+                            for p in Model.selected.effects[Model.effect-selected].params: KVField {
+                                label: p.name; value: p.value; suffix: p.unit == "%" ? "%" : ""; decimals: 2;
+                                changed(v) => { Backend.set-effect-param(Model.selected.effects[Model.effect-selected].id, p.name, v); }
+                            }
+                        }
+                        Rectangle { height: 8px; }
+                        GhostButton { small: true; text: "Open Effects"; clicked => { Backend.open-tool(Screen.effects); } }
+                    }
+                    if !Model.selected.valid: Text { text: "Select a clip to see its settings."; color: Theme.muted; font-size: 11.5px; wrap: word-wrap; }
+                }
+            }
+        }
+    }
+
+    // ---------- timeline header ----------
+    Rectangle {
+        x: 0px; y: root.top-h; width: parent.width; height: 36px; background: Theme.panel-bg;
+        Rectangle { y: 0px; height: 1px; width: parent.width; background: Theme.border; }
+        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.border; }
+        if !root.pro: Text { x: 12px; height: parent.height; vertical-alignment: center; text: "Timeline"; color: Theme.muted; font-size: 11px; }
+        if root.pro: HorizontalLayout {
+            x: 10px; y: 4px; height: 28px; spacing: 4px;
+            IconButton { size: 28px; icon: @image-url("../icons/cursor.svg"); active: Model.tool == 0; hint: "Select (V)"; clicked => { Backend.set-tool(0); } }
+            IconButton { size: 28px; icon: @image-url("../icons/arrow-up-right.svg"); active: Model.tool == 1; hint: "Ripple trim (B): closes gaps when you trim"; clicked => { Backend.set-tool(1); } }
+            IconButton { size: 28px; icon: @image-url("../icons/razor.svg"); active: Model.tool == 2; hint: "Razor (C): click a clip to cut it"; clicked => { Backend.set-tool(2); } }
+            Rectangle { width: 8px; }
+            IconButton { size: 28px; icon: @image-url("../icons/link.svg"); active: Model.snapping; hint: "Snap to edges (S)"; clicked => { Model.snapping = !Model.snapping; } }
+            IconButton { size: 28px; icon: @image-url("../icons/flag.svg"); hint: "Add marker (M)"; clicked => { Backend.add-marker(); } }
+            IconButton { size: 28px; icon: @image-url("../icons/scissors.svg"); hint: "Split at playhead (K)"; clicked => { Backend.split-at-playhead(); } }
+            IconButton { size: 28px; icon: @image-url("../icons/trash.svg"); hint: "Delete selected (Del)"; enabled: Model.selected.valid; clicked => { Backend.delete-selected(); } }
+            IconButton { size: 28px; icon: @image-url("../icons/plus.svg"); hint: "Add a track"; clicked => { Backend.add-track(Model.selected-track >= 0 && Model.selected.kind == 1 ? 1 : 0); } }
+        }
+        if root.pro: Text { x: parent.width - 330px; width: 90px; height: parent.height; vertical-alignment: center; horizontal-alignment: right; text: Model.playhead-text; color: Theme.text; font-size: 12.5px; font-weight: 500; }
+        Text { x: parent.width - 212px; height: parent.height; vertical-alignment: center; text: "Zoom"; color: Theme.muted; font-size: 11px; }
+        HSlider { x: parent.width - 170px; y: 7px; width: 156px; minimum: 2; maximum: 400; value: Model.zoom; show-value: false; changed(v) => { Backend.zoom-changed(v); } }
+    }
+    Timeline {
+        x: 0px; y: root.top-h + 36px; width: parent.width; height: parent.height - root.top-h - 36px;
+        pro: root.pro;
+    }
+}

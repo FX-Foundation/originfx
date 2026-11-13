@@ -24,7 +24,9 @@ jobs:
       - name: Install libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb
+          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev \
+            libclang-dev pkg-config libasound2-dev libxdo-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -66,6 +68,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
+      - name: FFmpeg 6.1 shared build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          $name = 'ffmpeg-6.1.1-full_build-shared.zip'
+          gh release download 6.1.1 -R GyanD/codexffmpeg -p $name -D ffmpeg-dl --clobber
+          Expand-Archive -Path "ffmpeg-dl/$name" -DestinationPath ffmpeg-x -Force
+          $ff = (Get-ChildItem ffmpeg-x -Directory | Select-Object -First 1).FullName
+          "FFMPEG_DIR=$ff" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: Build
         shell: pwsh
         run: |
@@ -80,6 +94,7 @@ jobs:
         run: |
           New-Item -ItemType Directory OriginFX-windows | Out-Null
           Copy-Item target\release\originfx.exe OriginFX-windows\OriginFX.exe
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" OriginFX-windows\
           Compress-Archive -Path OriginFX-windows\* -DestinationPath OriginFX-0.1.0-windows-x86_64.zip
       - uses: actions/upload-artifact@v4
         with:
@@ -93,18 +108,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
-      - name: Build both Mac architectures
+      - name: Install FFmpeg
+        run: |
+          brew install ffmpeg@6 pkg-config dylibbundler
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@6)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: Build
         run: |
           set +e
-          {
-            cargo build --release --bin originfx --target aarch64-apple-darwin &&
-            cargo build --release --bin originfx --target x86_64-apple-darwin
-          } 2>&1 | tee build.log
+          cargo build --release --bin originfx 2>&1 | tee build.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             grep -iE '^error|panick|failed|not found|cannot|unable' build.log | head -9 \
@@ -115,9 +129,9 @@ jobs:
         run: |
           APP=OriginFX.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          lipo -create -output "$APP/Contents/MacOS/OriginFX" \
-            target/aarch64-apple-darwin/release/originfx \
-            target/x86_64-apple-darwin/release/originfx
+          cp target/release/originfx "$APP/Contents/MacOS/OriginFX"
+          mkdir -p "$APP/Contents/Frameworks"
+          dylibbundler -od -b -x "$APP/Contents/MacOS/OriginFX" -d "$APP/Contents/Frameworks" -p @executable_path/../Frameworks
           cp assets/originfx.icns "$APP/Contents/Resources/OriginFX.icns"
           cat > "$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -136,9 +150,9 @@ jobs:
           </dict></plist>
           PLIST
           codesign --force --deep --sign - "$APP"
-          hdiutil create -volname OriginFX -srcfolder "$APP" -ov -format UDZO OriginFX-0.1.0-macos-universal.dmg
+          hdiutil create -volname OriginFX -srcfolder "$APP" -ov -format UDZO OriginFX-0.1.0-macos.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: OriginFX-macos
-          path: app/OriginFX-0.1.0-macos-universal.dmg
+          path: app/OriginFX-0.1.0-macos.dmg
           retention-days: 30

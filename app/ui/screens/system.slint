@@ -1,0 +1,285 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen } from "../store.slint";
+import { PageTitle, PrimaryButton, GhostButton, IconButton, Segmented, SettingRow, SummaryRow, SectionLabel, Toggle, CheckRow, HSlider, Chip, Icon, Dropdown, TabBar, TextField, NavSidebar, ProgressBar, Brand } from "../components.slint";
+
+component Panel inherits Rectangle {
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+component Meter inherits Rectangle {
+    in property <string> label;
+    in property <float> value;
+    height: 50px;
+    Text { x: 0px; y: 0px; text: root.label; color: Theme.muted; font-size: 12px; }
+    Text { y: 0px; width: parent.width; text: Math.round(root.value) + "%"; color: Theme.text-2; font-size: 12px; horizontal-alignment: right; }
+    ProgressBar { y: 24px; value: root.value / 100; }
+}
+
+// ---------------------------------------------------------------- Settings
+export component SettingsScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> pages: ["General", "Appearance", "Performance", "Shortcuts", "Plugins", "Updates", "About"];
+    NavSidebar {
+        x: 0px; y: 0px; height: parent.height; current: 4; status: Model.status;
+        navigate(i) => {
+            if (i == 0) { Model.home-page = 0; Backend.go(Screen.home); }
+            if (i == 1) { Model.home-page = 1; Backend.go(Screen.home); }
+            if (i == 2) { Backend.go(Screen.learn); }
+            if (i == 3) { Backend.go(Screen.library); }
+        }
+        mode-changed(m) => { Backend.set-mode(m); }
+    }
+    // page list
+    Rectangle {
+        x: 196px; y: 0px; width: 190px; height: parent.height; background: Theme.panel-bg;
+        Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+        VerticalLayout {
+            padding: 20px; spacing: 4px; alignment: start;
+            Text { text: "Settings"; color: Theme.text; font-size: 17px; font-weight: 500; }
+            Rectangle { height: 10px; }
+            for p[i] in root.pages: Rectangle {
+                height: 32px;
+                background: Model.settings-page == i ? Theme.selected-row : transparent;
+                Text { x: 12px; height: parent.height; vertical-alignment: center; text: p; color: Model.settings-page == i ? Theme.text : Theme.text-2; font-size: 12.5px; }
+                TouchArea { mouse-cursor: pointer; clicked => { Model.settings-page = i; } }
+            }
+        }
+    }
+    ScrollView {
+        x: 386px; y: 0px; width: parent.width - 386px; height: parent.height;
+        content-width: self.width;
+        VerticalLayout {
+            padding: 32px; spacing: 14px; alignment: start;
+            PageTitle { title: root.pages[Model.settings-page]; sub: ""; }
+
+            // General
+            if Model.settings-page == 0: Panel {
+                VerticalLayout {
+                    padding: 22px; spacing: 6px;
+                    SettingRow {
+                        label: "Save automatically"; hint: "How often your work is backed up.";
+                        Segmented { x: parent.width - self.width; items: ["1 min", "2 min", "5 min", "10 min"]; current: Model.autosave-minutes == 1 ? 0 : Model.autosave-minutes == 2 ? 1 : Model.autosave-minutes == 5 ? 2 : 3; changed(i) => { Backend.setting-changed("autosave", i == 0 ? "1" : i == 1 ? "2" : i == 2 ? "5" : "10"); } }
+                    }
+                    SettingRow {
+                        label: "New project frame rate";
+                        Dropdown { x: parent.width - self.width; width: 160px; items: ["24", "25", "30", "50", "60"]; current: Model.default-fps; changed(i) => { Backend.setting-changed("default-fps", i + ""); } }
+                    }
+                    SettingRow {
+                        label: "New project size";
+                        Dropdown { x: parent.width - self.width; width: 160px; items: ["720p", "1080p", "4K"]; current: Model.default-res; changed(i) => { Backend.setting-changed("default-res", i + ""); } }
+                    }
+                    SettingRow {
+                        label: "Timecode";
+                        Segmented { x: parent.width - self.width; items: ["Frames", "Milliseconds"]; current: Settings.timecode-style; changed(i) => { Backend.setting-changed("timecode", i + ""); } }
+                    }
+                    SettingRow {
+                        label: "Send crash reports"; hint: "Helps us fix problems. Never includes your media."; divider: false;
+                        Toggle { x: parent.width - self.width; on: Model.crash-reports; toggled(v) => { Backend.setting-changed("crash-reports", v ? "1" : "0"); } }
+                    }
+                }
+            }
+
+            // Appearance
+            if Model.settings-page == 1: Panel {
+                VerticalLayout {
+                    padding: 22px; spacing: 6px;
+                    SettingRow {
+                        label: "Theme";
+                        Segmented { x: parent.width - self.width; items: ["Match system", "Light", "Dark"]; current: Model.theme-choice; changed(i) => { Model.theme-choice = i; Backend.setting-changed("theme", i + ""); } }
+                    }
+                    SettingRow {
+                        label: "Layout"; hint: "Simple hides pro panels. Switch any time.";
+                        Segmented { x: parent.width - self.width; items: ["Simple", "Pro"]; current: Model.layout-choice; changed(i) => { Model.layout-choice = i; Backend.setting-changed("layout", i + ""); } }
+                    }
+                    SettingRow {
+                        label: "Interface size";
+                        HSlider { x: parent.width - 240px; width: 240px; minimum: 80; maximum: 150; value: Model.ui-scale; value-text: Math.round(self.value) + "%"; released => { Backend.setting-changed("ui-scale", self.value + ""); } }
+                    }
+                    SettingRow {
+                        label: "Show tooltips";
+                        Toggle { x: parent.width - self.width; on: Settings.hints; toggled(v) => { Backend.setting-changed("hints", v ? "1" : "0"); } }
+                    }
+                    SettingRow {
+                        label: "Reduce motion"; divider: false;
+                        Toggle { x: parent.width - self.width; on: Settings.reduce-motion; toggled(v) => { Backend.setting-changed("reduce-motion", v ? "1" : "0"); } }
+                    }
+                }
+            }
+
+            // Performance
+            if Model.settings-page == 2: VerticalLayout {
+                spacing: 14px;
+                Panel {
+                    VerticalLayout {
+                        padding: 22px; spacing: 10px;
+                        Meter { label: "Processor"; value: Model.cpu-pct; }
+                        Meter { label: "Graphics"; value: Model.gpu-pct; }
+                        Meter { label: "Memory"; value: Model.mem-pct; }
+                    }
+                }
+                Panel {
+                    VerticalLayout {
+                        padding: 22px; spacing: 6px;
+                        SettingRow {
+                            label: "Graphics card"; hint: Model.gpu-name;
+                            Toggle { x: parent.width - self.width; on: Model.hw-accel; toggled(v) => { Backend.setting-changed("hw-accel", v ? "1" : "0"); } }
+                        }
+                        SettingRow {
+                            label: "Power use"; hint: "Lower is quieter. Higher is faster.";
+                            Segmented { x: parent.width - self.width; items: ["Gentle", "Balanced", "Full speed"]; current: Model.governor; changed(i) => { Backend.setting-changed("governor", i + ""); } }
+                        }
+                        SettingRow {
+                            label: "Memory limit";
+                            HSlider { x: parent.width - 240px; width: 240px; minimum: 2; maximum: max(Model.memory-max-gb, 4); value: Model.memory-limit-gb; value-text: Math.round(self.value) + " GB"; released => { Backend.setting-changed("memory-limit", self.value + ""); } }
+                        }
+                        SettingRow {
+                            label: "Work in the background"; hint: "Proxies and thumbnails while you edit.";
+                            Toggle { x: parent.width - self.width; on: Model.background-tasks; toggled(v) => { Backend.setting-changed("background-tasks", v ? "1" : "0"); } }
+                        }
+                        SettingRow {
+                            label: "App cache"; hint: Model.cache-size-text; divider: false;
+                            GhostButton { x: parent.width - self.width; text: "Clear"; danger: true; clicked => { Backend.clear-app-cache(); } }
+                        }
+                    }
+                }
+            }
+
+            // Shortcuts
+            if Model.settings-page == 3: VerticalLayout {
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Segmented { items: ["OriginFX", "Premiere style", "Resolve style"]; current: Model.shortcut-preset; changed(i) => { Backend.set-shortcut-preset(i); } }
+                    Rectangle { }
+                    TextField { width: 220px; height: 32px; placeholder: "Search shortcuts"; has-icon: true; icon: @image-url("../icons/search.svg"); text <=> Model.shortcut-filter; edited(t) => { Backend.filter-shortcuts(t); } }
+                }
+                Panel {
+                    VerticalLayout {
+                        for s in Model.shortcuts: Rectangle {
+                            height: 40px;
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border-soft; }
+                            Text { x: 16px; height: parent.height; vertical-alignment: center; text: s.command; color: Theme.text; font-size: 12.5px; }
+                            Rectangle {
+                                x: parent.width - 160px; y: 6px; width: 144px; height: 28px;
+                                border-width: 1px; border-color: Model.rebinding == s.id ? Theme.accent : Theme.border;
+                                background: Model.rebinding == s.id ? Theme.accent-soft : Theme.input-bg;
+                                Text { text: Model.rebinding == s.id ? "Press a key" : s.keys; color: Theme.text; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                                TouchArea { mouse-cursor: pointer; clicked => { Backend.rebind(s.id); } }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Plugins
+            if Model.settings-page == 4: VerticalLayout {
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    TabBar { items: ["Installed", "Available"]; current: Model.plugins-tab; changed(i) => { Model.plugins-tab = i; } }
+                    Rectangle { }
+                    GhostButton { text: "Add from file"; has-icon: true; icon: @image-url("../icons/plus.svg"); clicked => { Backend.install-plugin(); } }
+                    GhostButton { text: "Open folder"; has-icon: true; icon: @image-url("../icons/folder.svg"); clicked => { Backend.browse-plugins(); } }
+                }
+                Panel {
+                    VerticalLayout {
+                        for p in Model.plugins: Rectangle {
+                            visible: Model.plugins-tab == 0 ? p.installed : !p.installed;
+                            height: (Model.plugins-tab == 0 ? p.installed : !p.installed) ? 64px : 0px;
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border-soft; }
+                            Rectangle { x: 16px; y: 18px; width: 28px; height: 28px; background: Theme.accent-soft; Icon { width: 14px; height: 14px; source: @image-url("../icons/plug.svg"); tint: Theme.accent; } }
+                            Text { x: 58px; y: 12px; text: p.name; color: Theme.text; font-size: 13px; font-weight: 500; }
+                            Text { x: 58px; y: 33px; width: parent.width - 160px; text: p.desc; color: Theme.muted; font-size: 11.5px; overflow: elide; }
+                            Toggle { x: parent.width - 66px; y: 20px; on: p.enabled; toggled(v) => { Backend.toggle-plugin(p.id, v); } }
+                        }
+                    }
+                }
+            }
+
+            // Updates
+            if Model.settings-page == 5: VerticalLayout {
+                spacing: 14px;
+                Panel {
+                    VerticalLayout {
+                        padding: 22px; spacing: 8px;
+                        Text { text: "Version " + Model.version; color: Theme.text; font-size: 15px; font-weight: 500; }
+                        Text { text: Model.update-status; color: Theme.text-2; font-size: 12.5px; }
+                        Text { text: Model.update-checked; color: Theme.muted; font-size: 11.5px; }
+                        Rectangle { height: 6px; }
+                        HorizontalLayout {
+                            spacing: 10px; alignment: start;
+                            PrimaryButton { text: "Check now"; has-icon: true; icon: @image-url("../icons/refresh.svg"); clicked => { Backend.check-updates(); } }
+                            if Model.update-available: GhostButton { text: "Download update"; has-icon: true; icon: @image-url("../icons/download.svg"); clicked => { Backend.open-update(); } }
+                        }
+                    }
+                }
+                Panel {
+                    VerticalLayout {
+                        padding: 22px; spacing: 6px;
+                        SettingRow {
+                            label: "Channel";
+                            Segmented { x: parent.width - self.width; items: ["Stable", "Preview"]; current: Model.update-channel; changed(i) => { Backend.setting-changed("update-channel", i + ""); } }
+                        }
+                        SettingRow {
+                            label: "Check automatically"; divider: false;
+                            Toggle { x: parent.width - self.width; on: Model.auto-updates; toggled(v) => { Backend.setting-changed("auto-updates", v ? "1" : "0"); } }
+                        }
+                    }
+                }
+            }
+
+            // About
+            if Model.settings-page == 6: VerticalLayout {
+                spacing: 14px;
+                Panel {
+                    VerticalLayout {
+                        padding: 26px; spacing: 10px;
+                        Brand { }
+                        Text { text: "Version " + Model.version; color: Theme.text-2; font-size: 12.5px; }
+                        Text { text: "A free, open-source video editor. Licensed under GPL-3.0."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px; alignment: start;
+                    GhostButton { text: "Source code"; has-icon: true; icon: @image-url("../icons/external.svg"); clicked => { Backend.open-link("source"); } }
+                    GhostButton { text: "Documentation"; has-icon: true; icon: @image-url("../icons/book.svg"); clicked => { Backend.open-link("docs"); } }
+                    GhostButton { text: "Report a problem"; has-icon: true; icon: @image-url("../icons/alert.svg"); clicked => { Backend.open-link("issue"); } }
+                    GhostButton { text: "Licenses"; has-icon: true; icon: @image-url("../icons/sheet.svg"); clicked => { Backend.open-link("licenses"); } }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Crash recovery
+export component RecoveryScreen inherits Rectangle {
+    background: Theme.page-bg;
+    Rectangle {
+        width: 560px; height: min(parent.height - 60px, 520px);
+        VerticalLayout {
+            spacing: 14px; alignment: center;
+            Brand { }
+            Text { text: "OriginFX closed unexpectedly"; color: Theme.text; font-size: 22px; font-weight: 500; }
+            Text { text: "Your work was backed up. Pick a version to bring back."; color: Theme.text-2; font-size: 13px; wrap: word-wrap; }
+            Rectangle { height: 4px; }
+            for r[i] in Model.recovery-options: Rectangle {
+                height: 58px; border-width: 1px;
+                border-color: Model.recovery-pick == i ? Theme.accent : Theme.border;
+                background: Model.recovery-pick == i ? Theme.accent-soft : Theme.card-bg;
+                Text { x: 18px; y: 10px; text: r.a; color: Theme.text; font-size: 13.5px; font-weight: 500; }
+                Text { x: 18px; y: 32px; text: r.b; color: Theme.muted; font-size: 11.5px; }
+                TouchArea { mouse-cursor: pointer; clicked => { Model.recovery-pick = i; } }
+            }
+            Rectangle { height: 6px; }
+            HorizontalLayout {
+                spacing: 10px;
+                PrimaryButton { text: "Restore"; has-icon: true; icon: @image-url("../icons/refresh.svg"); clicked => { Backend.restore-recovery(Model.recovery-pick); } }
+                GhostButton { text: "Open without restoring"; clicked => { Backend.open-without-restoring(); } }
+                GhostButton { text: "Discard"; danger: true; clicked => { Backend.discard-recovery(); } }
+            }
+        }
+    }
+}

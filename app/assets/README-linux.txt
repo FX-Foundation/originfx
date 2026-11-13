@@ -7,3 +7,5 @@ Needs: fontconfig and freetype. On an X11 session (not Wayland) it also needs
 
 Your choices are saved to ~/.config/OriginFX/setup.json
 Open source under GPL-3.0 by FX Foundation.
+
+Needs the FFmpeg 6 libraries. On Ubuntu or Debian: sudo apt install libavcodec60 libavformat60 libavutil58 libswscale7 libswresample4

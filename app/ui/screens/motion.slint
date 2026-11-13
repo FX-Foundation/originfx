@@ -1,0 +1,216 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Settings } from "../theme.slint";
+import { Model, Backend, Screen } from "../store.slint";
+import { ToolTopBar, PageTitle, PrimaryButton, GhostButton, IconButton, Segmented, SectionLabel, Toggle, CheckRow, HSlider, Chip, Icon, Dropdown, Tile, TabBar, TextField } from "../components.slint";
+
+component Panel inherits Rectangle {
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+component Monitor inherits Rectangle {
+    background: #000000;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    if Model.has-preview: Image { source: Model.preview; image-fit: contain; width: parent.width; height: parent.height; }
+    if !Model.has-preview: Icon { width: 20px; height: 20px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+}
+
+component NeedClip inherits Rectangle {
+    Text { text: "Pick a clip on the timeline first."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+component Transport inherits HorizontalLayout {
+    height: 32px; spacing: 10px; alignment: start;
+    IconButton { icon: @image-url("../icons/skip-back.svg"); clicked => { Backend.go-start(); } }
+    IconButton { icon: Model.playing ? @image-url("../icons/pause.svg") : @image-url("../icons/play.svg"); clicked => { Backend.play-pause(); } }
+    Text { vertical-alignment: center; text: Model.playhead-text; color: Theme.text-2; font-size: 12px; }
+}
+
+// ---------------------------------------------------------------- Titles
+export component TitlesScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> templates: ["Lower third", "Simple", "Centered", "Big title"];
+    property <[string]> colours: ["White", "Blue", "Gold", "Black", "Red", "Green"];
+    property <[string]> anims: ["None", "Fade", "Slide up", "Pop"];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 32px; spacing: 14px;
+            PageTitle { title: "Titles"; sub: "Type it, style it, drop it on the timeline."; }
+            Rectangle {
+                vertical-stretch: 1; background: #000000; border-width: 1px; border-color: Theme.border; clip: true;
+                if Model.has-title-preview: Image { source: Model.title-preview; image-fit: contain; width: parent.width; height: parent.height; }
+                if !Model.has-title-preview: Text { text: "Preview"; color: Theme.faint; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            SectionLabel { text: "Template"; }
+            HorizontalLayout {
+                spacing: 8px; height: 40px;
+                for t[i] in root.templates: Rectangle {
+                    border-width: 1px; border-color: Model.title-template == i ? Theme.accent : Theme.border;
+                    background: Model.title-template == i ? Theme.accent-soft : Theme.card-bg;
+                    Text { text: t; color: Theme.text; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Model.title-template = i; Backend.title-preview(); } }
+                }
+            }
+        }
+        Rectangle {
+            width: 340px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            ScrollView {
+                content-width: self.width;
+                VerticalLayout {
+                    padding: 22px; spacing: 10px; alignment: start;
+                    SectionLabel { text: "Text"; }
+                    TextField { text <=> Model.title-text; height: 34px; placeholder: "Main line"; edited(t) => { Backend.title-preview(); } }
+                    TextField { text <=> Model.title-sub; height: 34px; placeholder: "Second line"; edited(t) => { Backend.title-preview(); } }
+                    HSlider { label: "Size"; minimum: 10; maximum: 120; value: Model.title-size; changed(v) => { Model.title-size = v; } released => { Backend.title-preview(); } }
+                    SectionLabel { text: "Color"; }
+                    Dropdown { items: root.colours; current: Model.title-colour; changed(i) => { Model.title-colour = i; Backend.title-preview(); } }
+                    SectionLabel { text: "Comes in"; }
+                    Dropdown { items: root.anims; current: Model.title-in; changed(i) => { Model.title-in = i; } }
+                    SectionLabel { text: "Goes out"; }
+                    Dropdown { items: root.anims; current: Model.title-out; changed(i) => { Model.title-out = i; } }
+                    HSlider { label: "Animation length"; minimum: 0.1; maximum: 2; value: Model.title-anim-secs; value-text: Math.round(self.value * 10) / 10 + " s"; changed(v) => { Model.title-anim-secs = v; } }
+                    Rectangle { height: 6px; }
+                    PrimaryButton { text: "Add to timeline"; has-icon: true; icon: @image-url("../icons/plus.svg"); clicked => { Backend.title-add(); } }
+                    if Model.selected.valid && Model.selected.is-text: GhostButton { text: "Update selected title"; clicked => { Backend.update-selected-text(); } }
+                    GhostButton { text: "Reset"; has-icon: true; icon: @image-url("../icons/undo.svg"); clicked => { Backend.title-reset(); } }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Keyframes
+export component KeyframesScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> params: ["Position", "Scale", "Rotation", "Opacity"];
+    property <float> cur: Model.kf-param == 0 ? Model.selected.pos-x : Model.kf-param == 1 ? Model.selected.scale : Model.kf-param == 2 ? Model.selected.rotation : Model.selected.opacity;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    if !Model.selected.valid: NeedClip { x: 0px; y: 44px; width: parent.width; height: parent.height - 44px; }
+    if Model.selected.valid: HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 32px; spacing: 14px;
+            PageTitle { title: "Keyframes"; sub: "Move the playhead, change a value, set a key."; }
+            Monitor { vertical-stretch: 1; }
+            Transport { }
+            Panel {
+                height: 96px;
+                Text { x: 14px; y: 8px; text: "Keys on " + root.params[Model.kf-param]; color: Theme.muted; font-size: 11.5px; }
+                for k in Model.selected.keys: Rectangle {
+                    visible: k.param == Model.kf-param;
+                    x: 14px + (parent.width - 28px) * (Model.selected.duration > 0 ? k.time / Model.selected.duration : 0) - 5px;
+                    y: 44px; width: 10px; height: 10px; background: Theme.accent; border-radius: 5px;
+                    TouchArea { mouse-cursor: pointer; clicked => { Backend.remove-keyframe(k.param, Model.selected.start + k.time); } }
+                }
+                Rectangle { x: 14px; y: 48px; width: parent.width - 28px; height: 2px; background: Theme.border; z: -1; }
+            }
+        }
+        Rectangle {
+            width: 340px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            VerticalLayout {
+                x: 22px; y: 22px; width: parent.width - 44px; spacing: 12px; alignment: start;
+                SectionLabel { text: "Animate"; }
+                Segmented { items: root.params; current: Model.kf-param; changed(i) => { Model.kf-param = i; } }
+                HSlider { label: "Position X"; minimum: -100; maximum: 100; value: Model.selected.pos-x; value-text: Math.round(self.value) + ""; released => { Backend.set-transform("x", self.value); } }
+                HSlider { label: "Position Y"; minimum: -100; maximum: 100; value: Model.selected.pos-y; value-text: Math.round(self.value) + ""; released => { Backend.set-transform("y", self.value); } }
+                HSlider { label: "Scale"; minimum: 10; maximum: 300; value: Model.selected.scale; value-text: Math.round(self.value) + "%"; released => { Backend.set-transform("scale", self.value); } }
+                HSlider { label: "Rotation"; minimum: -180; maximum: 180; value: Model.selected.rotation; value-text: Math.round(self.value) + "°"; released => { Backend.set-transform("rotation", self.value); } }
+                HSlider { label: "Opacity"; minimum: 0; maximum: 100; value: Model.selected.opacity; value-text: Math.round(self.value) + "%"; released => { Backend.set-transform("opacity", self.value); } }
+                Rectangle { height: 6px; }
+                PrimaryButton { text: "Set key here"; has-icon: true; icon: @image-url("../icons/diamond.svg"); clicked => { Backend.set-keyframe(Model.kf-param, Model.playhead, root.cur); } }
+                GhostButton { text: "Clear keys for " + root.params[Model.kf-param]; danger: true; clicked => { Backend.clear-keyframes(Model.kf-param); } }
+                Text { text: "Once a value has keys, changing it at the playhead adds a new key."; color: Theme.muted; font-size: 11.5px; wrap: word-wrap; }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Shapes and masks
+export component MasksScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <float> mx: Model.selected.has-mask ? Model.selected.mask-x : 0;
+    property <float> my: Model.selected.has-mask ? Model.selected.mask-y : 0;
+    property <float> mw: Model.selected.has-mask ? Model.selected.mask-w : 60;
+    property <float> mh: Model.selected.has-mask ? Model.selected.mask-h : 60;
+    property <float> feather: Model.selected.mask-feather;
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    if !Model.selected.valid: NeedClip { x: 0px; y: 44px; width: parent.width; height: parent.height - 44px; }
+    if Model.selected.valid: HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 32px; spacing: 14px;
+            PageTitle { title: "Shapes and masks"; sub: "Show only part of a clip, or add a shape."; }
+            Monitor { vertical-stretch: 1; }
+            Transport { }
+            SectionLabel { text: "Add a shape"; }
+            HorizontalLayout {
+                spacing: 8px; height: 38px; alignment: start;
+                GhostButton { text: "Rectangle"; has-icon: true; icon: @image-url("../icons/square.svg"); clicked => { Backend.add-shape(0); } }
+                GhostButton { text: "Circle"; has-icon: true; icon: @image-url("../icons/circle.svg"); clicked => { Backend.add-shape(1); } }
+                GhostButton { text: "Star"; has-icon: true; icon: @image-url("../icons/star.svg"); clicked => { Backend.add-shape(2); } }
+            }
+        }
+        Rectangle {
+            width: 340px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            VerticalLayout {
+                x: 22px; y: 22px; width: parent.width - 44px; spacing: 12px; alignment: start;
+                SectionLabel { text: "Mask on " + Model.selected.name; }
+                Segmented { items: ["Rectangle", "Ellipse"]; current: Model.mask-tool == 1 ? 0 : 1; changed(i) => { Model.mask-tool = i == 0 ? 1 : 2; } }
+                CheckRow { text: "Invert (hide the inside)"; checked: Model.selected.mask-invert; toggled(v) => { Backend.apply-mask(Model.mask-tool, v, root.feather, root.mx, root.my, root.mw, root.mh); } }
+                HSlider { label: "Soft edge"; minimum: 0; maximum: 50; value: root.feather; value-text: Math.round(self.value) + ""; released => { Backend.apply-mask(Model.mask-tool, Model.selected.mask-invert, self.value, root.mx, root.my, root.mw, root.mh); } }
+                HSlider { label: "Across"; minimum: -100; maximum: 100; value: root.mx; value-text: Math.round(self.value) + ""; released => { Backend.apply-mask(Model.mask-tool, Model.selected.mask-invert, root.feather, self.value, root.my, root.mw, root.mh); } }
+                HSlider { label: "Up and down"; minimum: -100; maximum: 100; value: root.my; value-text: Math.round(self.value) + ""; released => { Backend.apply-mask(Model.mask-tool, Model.selected.mask-invert, root.feather, root.mx, self.value, root.mw, root.mh); } }
+                HSlider { label: "Width"; minimum: 5; maximum: 200; value: root.mw; value-text: Math.round(self.value) + ""; released => { Backend.apply-mask(Model.mask-tool, Model.selected.mask-invert, root.feather, root.mx, root.my, self.value, root.mh); } }
+                HSlider { label: "Height"; minimum: 5; maximum: 200; value: root.mh; value-text: Math.round(self.value) + ""; released => { Backend.apply-mask(Model.mask-tool, Model.selected.mask-invert, root.feather, root.mx, root.my, root.mw, self.value); } }
+                PrimaryButton { text: Model.selected.has-mask ? "Update mask" : "Add mask"; clicked => { Backend.apply-mask(Model.mask-tool, Model.selected.mask-invert, root.feather, root.mx, root.my, root.mw, root.mh); } }
+                GhostButton { text: "Remove mask"; danger: true; enabled: Model.selected.has-mask; clicked => { Backend.remove-mask(); } }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Composition
+export component CompositionScreen inherits Rectangle {
+    background: Theme.page-bg;
+    property <[string]> blends: ["Normal", "Multiply", "Screen", "Overlay", "Soft light", "Darken", "Lighten", "Difference"];
+    ToolTopBar { x: 0px; y: 0px; width: parent.width; project: Model.project-name; close => { Backend.back(); } }
+    HorizontalLayout {
+        x: 0px; y: 44px; width: parent.width; height: parent.height - 44px;
+        VerticalLayout {
+            padding: 32px; spacing: 14px;
+            PageTitle { title: "Layers"; sub: "Stack clips, set how they blend."; }
+            Monitor { vertical-stretch: 1; }
+            Transport { }
+        }
+        Rectangle {
+            width: 340px; background: Theme.panel-bg;
+            Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+            VerticalLayout {
+                x: 22px; y: 22px; width: parent.width - 44px; spacing: 10px; alignment: start;
+                SectionLabel { text: "Layers at the playhead"; }
+                if Model.layer-names.length == 0: Text { text: "Nothing under the playhead."; color: Theme.muted; font-size: 12px; }
+                for n[i] in Model.layer-names: Rectangle {
+                    height: 34px; border-width: 1px;
+                    border-color: Model.layer-current == i ? Theme.accent : Theme.border;
+                    background: Model.layer-current == i ? Theme.accent-soft : Theme.card-bg;
+                    Text { x: 12px; width: parent.width - 24px; height: parent.height; vertical-alignment: center; text: n; color: Theme.text; font-size: 12px; overflow: elide; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Model.layer-current = i; Backend.select-layer(i); } }
+                }
+                if Model.selected.valid: VerticalLayout {
+                    spacing: 10px;
+                    SectionLabel { text: "Blend"; }
+                    Dropdown { items: root.blends; current: Model.selected.blend; changed(i) => { Backend.set-blend(i); } }
+                    HSlider { label: "Opacity"; minimum: 0; maximum: 100; value: Model.selected.opacity; value-text: Math.round(self.value) + "%"; released => { Backend.set-transform("opacity", self.value); } }
+                }
+            }
+        }
+    }
+}
