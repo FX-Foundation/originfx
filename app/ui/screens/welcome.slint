@@ -45,7 +45,7 @@ export component WelcomeScreen inherits Rectangle {
         init => { self.focus(); }
         key-pressed(event) => {
             if (event.text == Key.Return) {
-                if (root.step < 3) { root.next(); } else { root.finish("project"); }
+                if (root.step < 3) { root.next(); } else { root.finish("home"); }
                 return accept;
             }
             if (event.text == Key.Escape) {
@@ -431,7 +431,7 @@ export component WelcomeScreen inherits Rectangle {
             y: 547px;
             width: 112px;
             text: "New project";
-            clicked => { root.finish("project"); }
+            clicked => { root.finish("home"); }
         }
     }
 }

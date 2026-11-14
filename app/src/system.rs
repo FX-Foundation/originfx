@@ -305,6 +305,47 @@ fn report_gpu(weak: &slint::Weak<App>, raw: Option<String>) {
     });
 }
 
+thread_local! {
+    // The scale factor we last set ourselves (0 = never).
+    static LAST_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Keep the interface at the size the user picked, on top of whatever scale the
+/// window system reports. Called often and cheap when nothing changed. If the
+/// window system changes the scale (first show, moving to another monitor), the
+/// new value becomes the base and the user's percentage is applied again.
+pub fn sync_ui_scale(ui: &App, percent: f32) {
+    let win = ui.window();
+    let cur = win.scale_factor();
+    let last = LAST_SCALE.with(|l| l.get());
+    if last > 0.0 && (cur - last).abs() < 0.001 && (percent - PERCENT.with(|p| p.get())).abs() < 0.01 {
+        return;
+    }
+    let base = if last > 0.0 && (cur - last).abs() < 0.001 {
+        BASE.with(|b| b.get())
+    } else {
+        cur
+    };
+    let want = base * (percent.clamp(50.0, 200.0) / 100.0);
+    BASE.with(|b| b.set(base));
+    PERCENT.with(|p| p.set(percent));
+    LAST_SCALE.with(|l| l.set(want));
+    if (cur - want).abs() < 0.001 {
+        return;
+    }
+    // Keep the window the same size on screen; only the interface inside it grows.
+    let physical = win.size();
+    win.dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: want });
+    win.dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(physical.width as f32 / want, physical.height as f32 / want),
+    });
+}
+
+thread_local! {
+    static BASE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+    static PERCENT: std::cell::Cell<f32> = const { std::cell::Cell::new(100.0) };
+}
+
 pub fn apply_settings(st: &mut State, ui: &App) {
     let s = &st.settings;
     let g = ui.global::<Settings>();
@@ -515,7 +556,8 @@ pub fn open_project(st: &mut State, ui: &App, path: &Path) {
 }
 
 pub fn refresh_recent(st: &mut State, ui: &App) {
-    st.settings.recent.retain(|r| Path::new(&r.path).exists());
+    let hidden = st.settings.hidden.clone();
+    st.settings.recent.retain(|r| Path::new(&r.path).exists() && !hidden.contains(&r.path));
     // also list projects found in the projects folder
     let root = st.settings.storage_dir();
     if let Ok(rd) = std::fs::read_dir(&root) {
@@ -525,7 +567,7 @@ pub fn refresh_recent(st: &mut State, ui: &App) {
                 if let Ok(inner) = std::fs::read_dir(&d) {
                     for f in inner.flatten() {
                         let p = f.path();
-                        if p.extension().is_some_and(|x| x == "originfx") && !st.settings.recent.iter().any(|r| Path::new(&r.path) == p) {
+                        if p.extension().is_some_and(|x| x == "originfx") && !hidden.contains(&p.to_string_lossy().to_string()) && !st.settings.recent.iter().any(|r| Path::new(&r.path) == p) {
                             let t = f.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
                             st.settings.recent.push(crate::settings::RecentEntry {
                                 name: p.file_stem().unwrap_or_default().to_string_lossy().to_string(),
@@ -766,9 +808,6 @@ fn setting_changed(st: &mut State, ui: &App, key: &str, value: &str) {
     }
     st.settings.save();
     apply_settings(st, ui);
-    if key == "ui-scale" {
-        st.toast(ui, "Interface size changes the next time OriginFX opens.");
-    }
 }
 
 // ---------------------------------------------------------------- updates

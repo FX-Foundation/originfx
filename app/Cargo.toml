@@ -33,6 +33,8 @@ originfx-audio-engine = { path = "../crates/audio-engine" }
 originfx-effects-engine = { path = "../crates/effects-engine" }
 originfx-plugin-engine = { path = "../crates/plugin-engine", features = ["example"] }
 originfx-motion-graphics-engine = { path = "../crates/motion-graphics-engine" }
+trash = "5"
+arboard = "3"
 
 [build-dependencies]
 slint-build = "1.18.1"

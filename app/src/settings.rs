@@ -48,6 +48,8 @@ pub struct AppSettings {
     pub auto_updates: bool,
     pub last_update_check: String,
     pub recent: Vec<RecentEntry>,
+    /// Projects the user removed from the Recent list (the files stay on disk).
+    pub hidden: Vec<String>,
     pub lessons_done: BTreeSet<usize>,
     pub favorites: BTreeSet<String>,
     pub clean_exit: bool,
@@ -96,6 +98,7 @@ impl Default for AppSettings {
             auto_updates: true,
             last_update_check: String::new(),
             recent: Vec::new(),
+            hidden: Vec::new(),
             lessons_done: BTreeSet::new(),
             favorites: BTreeSet::new(),
             clean_exit: true,
@@ -208,6 +211,7 @@ impl AppSettings {
     }
 
     pub fn touch_recent(&mut self, name: &str, path: &str, aspect: &str) {
+        self.hidden.retain(|h| h != path);
         self.recent.retain(|r| r.path != path);
         self.recent.insert(
             0,

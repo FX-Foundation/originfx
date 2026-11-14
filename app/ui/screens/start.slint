@@ -7,6 +7,7 @@ import { ScrollView } from "std-widgets.slint";
 component ProjectCard inherits Rectangle {
     in property <RecentProject> p;
     callback clicked;
+    callback context(length, length);
     height: 150px;
     background: Theme.card-bg;
     border-width: 1px;
@@ -21,7 +22,15 @@ component ProjectCard inherits Rectangle {
     Text { x: 10px; y: 115px; width: parent.width - 70px; overflow: elide; text: root.p.name; color: Theme.text; font-size: 12px; font-weight: 500; }
     Text { x: 10px; y: 131px; text: root.p.edited; color: Theme.muted; font-size: 10.5px; }
     Chip { x: parent.width - self.width - 10px; y: 120px; text: root.p.aspect; }
-    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+    }
 }
 
 component ActionCard inherits Rectangle {
@@ -43,6 +52,27 @@ component ActionCard inherits Rectangle {
 export component HomeScreen inherits Rectangle {
     background: Theme.page-bg;
     property <int> page: Model.home-page;   // 0 home, 1 projects
+    // right-click menu on a project
+    property <RecentProject> target;
+    property <int> dialog: 0;               // 0 none, 1 rename, 2 move to trash, 3 properties
+    property <string> rename-text;
+    property <length> menu-x;
+    property <length> menu-y;
+    property <bool> pro: Settings.mode == 2;
+    property <[string]> menu-ids: root.pro ? ["open", "rename", "duplicate", "reveal", "remove", "trash", "copy", "props", "export", "recovery"] : ["open", "rename", "duplicate", "reveal", "remove", "trash"];
+    property <[string]> menu-labels: root.pro ? ["Open", "Rename", "Duplicate", "Show in folder", "Remove from recent", "Move to Trash", "Copy path", "Properties", "Export", "Open autosaved copy"] : ["Open", "Rename", "Duplicate", "Show in folder", "Remove from recent", "Move to Trash"];
+    function pick(id: string) {
+        if (id == "open") { Backend.open-recent(root.target.path); }
+        if (id == "rename") { root.rename-text = root.target.name; root.dialog = 1; }
+        if (id == "duplicate") { Backend.project-duplicate(root.target.path); }
+        if (id == "reveal") { Backend.project-reveal(root.target.path); }
+        if (id == "remove") { Backend.project-remove-recent(root.target.path); }
+        if (id == "trash") { root.dialog = 2; }
+        if (id == "copy") { Backend.project-copy-path(root.target.path); }
+        if (id == "props") { Backend.project-properties(root.target.path); root.dialog = 3; }
+        if (id == "export") { Backend.project-export(root.target.path); }
+        if (id == "recovery") { Backend.project-open-recovery(root.target.path); }
+    }
     NavSidebar {
         x: 0px; y: 0px; height: parent.height;
         current: root.page == 1 ? 1 : 0;
@@ -63,7 +93,7 @@ export component HomeScreen inherits Rectangle {
             padding: 30px; alignment: start;
             spacing: 0px;
             HorizontalLayout {
-                PageTitle { title: root.page == 0 ? "Welcome back" : "Projects"; sub: root.page == 0 ? "Pick up where you left off, or start something new." : "Everything in " + Model.projects-folder + "."; }
+                PageTitle { title: root.page == 0 ? "Dashboard" : "Projects"; sub: root.page == 0 ? "Recent projects" : "Everything in " + Model.projects-folder + "."; }
                 Rectangle { }
                 TextField { width: 240px; height: 32px; placeholder: "Search your projects"; has-icon: true; icon: @image-url("../icons/search.svg"); edited(t) => { Backend.search-projects(t); } }
             }
@@ -104,7 +134,118 @@ export component HomeScreen inherits Rectangle {
                     width: cw;
                     p: p;
                     clicked => { Backend.open-recent(p.path); }
+                    context(x, y) => {
+                        root.target = p;
+                        root.menu-x = x - root.absolute-position.x;
+                        root.menu-y = y - root.absolute-position.y;
+                        Backend.project-menu-opened(p.path);
+                        menu.show();
+                    }
                 }
+            }
+        }
+    }
+
+    // ---------- right-click menu ----------
+    menu := PopupWindow {
+        width: 210px;
+        height: root.menu-ids.length * 28px + 8px;
+        x: min(root.menu-x, root.width - self.width - 8px);
+        y: min(root.menu-y, root.height - self.height - 8px);
+        Rectangle {
+            background: Theme.panel-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 2px;
+            VerticalLayout {
+                padding: 4px;
+                for id[i] in root.menu-ids: Rectangle {
+                    property <bool> off: id == "recovery" && !Model.menu-recovery;
+                    height: 28px;
+                    border-radius: 2px;
+                    background: ita.has-hover && !off ? Theme.hover : transparent;
+                    if id == "copy" || id == "trash": Rectangle { y: -2px; x: 6px; width: parent.width - 12px; height: 1px; background: Theme.border; }
+                    Text {
+                        x: 10px;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        text: root.menu-labels[i];
+                        color: off ? Theme.faint : (id == "trash" ? Theme.danger : Theme.text);
+                        font-size: 12.5px;
+                    }
+                    ita := TouchArea {
+                        enabled: !off;
+                        mouse-cursor: pointer;
+                        clicked => { root.pick(id); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------- rename / move to trash / properties ----------
+    if root.dialog != 0: Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: #000000a0;
+        TouchArea { clicked => { root.dialog = 0; } }
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 400px;
+            height: root.dialog == 1 ? 170px : (root.dialog == 2 ? 170px : 70px + Model.project-props.length * 28px + 54px);
+            background: Theme.panel-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 2px;
+            TouchArea { }
+            Text {
+                x: 20px; y: 18px; width: parent.width - 40px; overflow: elide;
+                text: root.dialog == 1 ? "Rename project" : (root.dialog == 2 ? "Move to Trash" : root.target.name);
+                color: Theme.text; font-size: 14px; font-weight: 500;
+            }
+            if root.dialog == 1: TextField {
+                x: 20px; y: 58px; width: parent.width - 40px;
+                text <=> root.rename-text;
+                accepted(t) => { Backend.project-rename(root.target.path, t); root.dialog = 0; }
+            }
+            if root.dialog == 2: Text {
+                x: 20px; y: 50px; width: parent.width - 40px;
+                wrap: word-wrap;
+                text: "\"" + root.target.name + "\" and the media copied into its folder will move to the Trash. You can restore it from there.";
+                color: Theme.text-2; font-size: 12.5px;
+            }
+            if root.dialog == 3: VerticalLayout {
+                x: 20px; y: 56px; width: parent.width - 40px;
+                for kv in Model.project-props: Rectangle {
+                    height: 28px;
+                    Text { x: 0px; y: 0px; width: 100px; height: parent.height; vertical-alignment: center; text: kv.k; color: Theme.muted; font-size: 12px; }
+                    Text { x: 110px; y: 0px; width: parent.width - 110px; height: parent.height; vertical-alignment: center; overflow: elide; text: kv.v; color: Theme.text; font-size: 12px; }
+                }
+            }
+            if root.dialog == 1: GhostButton {
+                x: parent.width - 20px - 88px - 8px - self.width; y: parent.height - 52px; width: 88px;
+                text: "Cancel";
+                clicked => { root.dialog = 0; }
+            }
+            if root.dialog == 1: PrimaryButton {
+                x: parent.width - 20px - self.width; y: parent.height - 52px; width: 88px;
+                text: "Rename";
+                clicked => { Backend.project-rename(root.target.path, root.rename-text); root.dialog = 0; }
+            }
+            if root.dialog == 2: GhostButton {
+                x: parent.width - 20px - 128px - 8px - self.width; y: parent.height - 52px; width: 88px;
+                text: "Cancel";
+                clicked => { root.dialog = 0; }
+            }
+            if root.dialog == 2: PrimaryButton {
+                x: parent.width - 20px - self.width; y: parent.height - 52px; width: 128px;
+                text: "Move to Trash";
+                clicked => { Backend.project-trash(root.target.path); root.dialog = 0; }
+            }
+            if root.dialog == 3: GhostButton {
+                x: parent.width - 20px - self.width; y: parent.height - 52px; width: 88px;
+                text: "Close";
+                clicked => { root.dialog = 0; }
             }
         }
     }

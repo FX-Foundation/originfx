@@ -6,6 +6,7 @@ slint::include_modules!();
 
 mod media;
 mod player;
+mod projects;
 mod session;
 mod settings;
 mod system;
@@ -273,6 +274,7 @@ pub fn bump_focus(ui: &App) {
 fn tick() {
     with(|st, ui| {
         let m = ui.global::<Model>();
+        system::sync_ui_scale(ui, st.settings.ui_scale);
         // keep the preview worker on the latest project
         if let Some(s) = &st.session {
             if st.worker.is_none() || st.worker_rev != s.revision {
@@ -719,6 +721,7 @@ fn main() -> Result<(), slint::PlatformError> {
     media::wire(&ui);
     tools::wire(&ui);
     system::wire(&ui);
+    projects::wire(&ui);
     voice::wire(&ui);
 
     with(|st, ui| system::startup(st, ui));

@@ -168,6 +168,8 @@ export global Model {
     in-out property <string> status: "Running smoothly";
     in-out property <int> focus-tick: 0;
     in-out property <string> toast;
+    in-out property <bool> menu-recovery: false;
+    in-out property <[KV]> project-props: [];
     in-out property <bool> busy: false;
     in-out property <string> busy-text;
     in-out property <float> busy-progress: -1;
@@ -458,6 +460,16 @@ export global Backend {
     callback new-project(string, string, int);    // name, folder, template
     callback open-project-dialog();
     callback open-recent(string);
+    callback project-menu-opened(string);
+    callback project-rename(string, string);
+    callback project-duplicate(string);
+    callback project-reveal(string);
+    callback project-remove-recent(string);
+    callback project-trash(string);
+    callback project-copy-path(string);
+    callback project-properties(string);
+    callback project-export(string);
+    callback project-open-recovery(string);
     callback save-project();
     callback save-project-as();
     callback close-project();
