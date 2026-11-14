@@ -56,6 +56,8 @@ export component HomeScreen inherits Rectangle {
     property <RecentProject> target;
     property <int> dialog: 0;               // 0 none, 1 rename, 2 move to trash, 3 properties
     property <string> rename-text;
+    property <string> query;
+    property <bool> search-open: false;
     property <length> menu-x;
     property <length> menu-y;
     property <bool> pro: Settings.mode == 2;
@@ -95,7 +97,12 @@ export component HomeScreen inherits Rectangle {
             HorizontalLayout {
                 PageTitle { title: root.page == 0 ? "Dashboard" : "Projects"; sub: root.page == 0 ? "Recent projects" : "Everything in " + Model.projects-folder + "."; }
                 Rectangle { }
-                TextField { width: 240px; height: 32px; placeholder: "Search your projects"; has-icon: true; icon: @image-url("../icons/search.svg"); edited(t) => { Backend.search-projects(t); } }
+                TextField {
+                    width: 240px; height: 32px; placeholder: "Search your projects"; has-icon: true; icon: @image-url("../icons/search.svg");
+                    text <=> root.query;
+                    edited(t) => { root.search-open = t != ""; Backend.search-projects(t); }
+                    accepted(t) => { root.search-open = false; }
+                }
             }
             Rectangle { height: 26px; }
             HorizontalLayout {
@@ -118,7 +125,11 @@ export component HomeScreen inherits Rectangle {
             if Model.recent.length == 0: Rectangle {
                 height: 120px;
                 border-width: 1px; border-color: Theme.border;
-                Text { text: "No projects yet. Start one, and it shows up here."; color: Theme.muted; font-size: 12.5px; }
+                Text {
+                    text: root.query != "" ? "No projects found." : "No projects yet. Start one, and it shows up here.";
+                    color: root.query != "" ? Theme.danger : Theme.muted;
+                    font-size: 12.5px;
+                }
             }
             // grid, 3 per row
             property <int> cols: 3;
@@ -141,6 +152,38 @@ export component HomeScreen inherits Rectangle {
                         Backend.project-menu-opened(p.path);
                         menu.show();
                     }
+                }
+            }
+        }
+    }
+
+    // ---------- search results window ----------
+    if root.search-open && root.query != "": Rectangle {
+        x: root.width - 30px - 240px;
+        y: 30px + 32px + 4px;
+        width: 240px;
+        height: min(Model.recent.length, 6) * 30px + 8px + (Model.recent.length == 0 ? 22px : 0px);
+        background: Theme.panel-bg;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: 2px;
+        TouchArea { }
+        if Model.recent.length == 0: Text {
+            x: 12px; y: 0px; height: parent.height; vertical-alignment: center;
+            text: "No projects found.";
+            color: Theme.danger; font-size: 12px;
+        }
+        VerticalLayout {
+            padding: 4px;
+            for p[i] in Model.recent: Rectangle {
+                height: i < 6 ? 30px : 0px;
+                visible: i < 6;
+                background: sta.has-hover ? Theme.hover : transparent;
+                Text { x: 8px; y: 0px; width: parent.width - 16px - 50px; height: parent.height; vertical-alignment: center; overflow: elide; text: p.name; color: Theme.text; font-size: 12.5px; }
+                Text { x: parent.width - 58px; y: 0px; width: 50px; height: parent.height; vertical-alignment: center; horizontal-alignment: right; text: p.aspect; color: Theme.muted; font-size: 10.5px; }
+                sta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.search-open = false; Backend.open-recent(p.path); }
                 }
             }
         }
