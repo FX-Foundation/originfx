@@ -659,6 +659,47 @@ fn refresh_lessons(st: &mut State, ui: &App) {
 
 // ---------------------------------------------------------------- library
 
+/// name, group, description, length, looks like, path. An empty path means design only for now.
+/// The `transition:N` entries are the eleven that work today.
+const LIB_TRANSITIONS: [(&str, &str, &str, &str, &str, &str); 36] = [
+    ("Cross dissolve", "Basics", "One clip fades into the next.", "1 second", "Smooth", "transition:0"),
+    ("Dip to black", "Basics", "Fades out to black, then in to the next clip.", "1 second", "Smooth", "transition:1"),
+    ("Dip to white", "Basics", "Fades out to white, then in to the next clip.", "1 second", "Smooth", "transition:2"),
+    ("Fade in", "Basics", "A clip fades up from black.", "1 second", "Smooth", ""),
+    ("Fade out", "Basics", "A clip fades down to black.", "1 second", "Smooth", ""),
+    ("Film flash", "Basics", "A short white pulse on the cut.", "0.3 seconds", "Punchy", ""),
+    ("Wipe left", "Wipes", "The next clip wipes in from the right.", "1 second", "Clean", "transition:3"),
+    ("Wipe right", "Wipes", "The next clip wipes in from the left.", "1 second", "Clean", "transition:4"),
+    ("Wipe up", "Wipes", "The next clip wipes in from the bottom.", "1 second", "Clean", "transition:5"),
+    ("Wipe down", "Wipes", "The next clip wipes in from the top.", "1 second", "Clean", "transition:6"),
+    ("Diagonal wipe", "Wipes", "The next clip wipes in along a diagonal edge.", "1 second", "Clean", ""),
+    ("Circle iris", "Wipes", "A circle opens or closes to reveal the next clip.", "1 second", "Classic", ""),
+    ("Clock wipe", "Wipes", "A sweeping hand reveals the next clip like a clock.", "1 second", "Classic", ""),
+    ("Push left", "Push and slide", "The next clip pushes the old one out to the left.", "1 second", "Smooth", "transition:7"),
+    ("Push right", "Push and slide", "The next clip pushes the old one out to the right.", "1 second", "Smooth", "transition:8"),
+    ("Push up", "Push and slide", "The next clip pushes the old one out upward.", "1 second", "Smooth", "transition:9"),
+    ("Push down", "Push and slide", "The next clip pushes the old one out downward.", "1 second", "Smooth", "transition:10"),
+    ("Slide over", "Push and slide", "The next clip slides on top of the old one.", "1 second", "Smooth", ""),
+    ("Reveal", "Push and slide", "The old clip slides away to show the next one underneath.", "1 second", "Smooth", ""),
+    ("Zoom in", "Zoom and motion", "The picture zooms in and cuts to the next clip.", "0.6 seconds", "Dynamic", ""),
+    ("Zoom out", "Zoom and motion", "The picture zooms out into the next clip.", "0.6 seconds", "Dynamic", ""),
+    ("Whip pan", "Zoom and motion", "A fast blurred swipe, popular in Reels and Shorts.", "0.4 seconds", "Dynamic", ""),
+    ("Spin zoom", "Zoom and motion", "A fast spinning zoom into the next clip.", "0.6 seconds", "Dynamic", ""),
+    ("Shake", "Zoom and motion", "A quick camera shake on the cut.", "0.4 seconds", "Punchy", ""),
+    ("Push zoom", "Zoom and motion", "The picture zooms through the cut.", "0.6 seconds", "Dynamic", ""),
+    ("Blur dissolve", "Blur and light", "Blurs out, then sharpens into the next clip.", "1 second", "Soft", ""),
+    ("Light leak", "Blur and light", "A warm flare of light sweeps across the cut.", "1 second", "Warm", ""),
+    ("Glow flash", "Blur and light", "The picture blooms with glow, then settles on the next clip.", "0.8 seconds", "Soft", ""),
+    ("Defocus", "Blur and light", "The picture drifts out of focus, then back into the next clip.", "1 second", "Soft", ""),
+    ("Film burn", "Blur and light", "An orange film burn covers the cut.", "1 second", "Warm", ""),
+    ("Glitch", "Style", "Broken digital blocks and tearing on the cut.", "0.5 seconds", "Digital", ""),
+    ("RGB split", "Style", "The red, green and blue channels slide apart on the cut.", "0.5 seconds", "Digital", ""),
+    ("VHS", "Style", "Tape distortion and noise bars on the cut.", "0.6 seconds", "Retro", ""),
+    ("Digital stretch", "Style", "The picture smears and stretches across the cut.", "0.5 seconds", "Digital", ""),
+    ("Luma fade", "Style", "The next clip appears in order of brightness.", "1 second", "Smooth", ""),
+    ("Ink bleed", "Style", "Ink spreads across the frame to reveal the next clip.", "1.2 seconds", "Organic", ""),
+];
+
 /// name, group, description, length, looks like, path. An empty path means the tile is design only
 /// for now (no engine behind it yet). The four with `title:N` paths are the ones that work today.
 const TITLES: [(&str, &str, &str, &str, &str, &str); 30] = [
@@ -769,6 +810,25 @@ pub fn refresh_library(st: &mut State, ui: &App) {
         });
         id += 1;
     }
+    for (n, (name, group, desc, len, looks, path)) in LIB_TRANSITIONS.iter().enumerate() {
+        all.push(LibraryItem {
+            id,
+            name: (*name).into(),
+            kind: 2,
+            kind_text: "Transition".into(),
+            desc: (*desc).into(),
+            length: (*len).into(),
+            works_on: "Any cut".into(),
+            looks_like: (*looks).into(),
+            favorite: false,
+            path: if path.is_empty() { format!("transition-ui:{n}") } else { (*path).to_string() }.into(),
+            icon_id: 0,
+            group: (*group).into(),
+            col: 0,
+            y: 0,
+        });
+        id += 1;
+    }
     let mut push = |name: &str, kind: i32, kt: &str, desc: &str, len: &str, works: &str, looks: &str, path: &str| {
         all.push(LibraryItem {
             id,
@@ -788,9 +848,6 @@ pub fn refresh_library(st: &mut State, ui: &App) {
         });
         id += 1;
     };
-    for (i, (n, _)) in crate::session::TRANSITIONS.iter().enumerate() {
-        push(n, 2, "Transition", "Goes between two clips that touch.", "1 second", "Any cut", "Smooth", &format!("transition:{i}"));
-    }
     for (n, k, cat, _) in crate::tools::EFFECT_TILES.iter() {
         let idx = tl::EffectKind::ALL.iter().position(|x| x == k).unwrap_or(0);
         push(n, 3, "Effect", &format!("{cat} effect for pictures. Every setting can be keyframed."), "Clip length", "Video clips", cat, &format!("effect:{idx}"));
@@ -823,10 +880,10 @@ fn filter_library(st: &mut State, ui: &App) {
     if m.get_library_pick() as usize >= items.len() {
         m.set_library_pick(0);
     }
-    m.set_library(vec_model(layout_library(items, cat == 8 || cat == 1, &m)));
+    m.set_library(vec_model(layout_library(items, cat == 8 || cat == 1 || cat == 2, &m)));
 }
 
-/// Places tiles on a 4-column grid. The Primitives and Titles views are split into sections, each
+/// Places tiles on a 4-column grid. The Primitives, Titles and Transitions views are split into sections, each
 /// with its own heading and its own grid.
 fn layout_library(mut items: Vec<LibraryItem>, sectioned: bool, m: &Model<'_>) -> Vec<LibraryItem> {
     const COLS: usize = 4;
@@ -875,6 +932,10 @@ fn library_add(st: &mut State, ui: &App, i: i32) {
     let path = item.path.to_string();
     if path.starts_with("primitive:") {
         st.toast(ui, "Primitives are not wired into the engine yet.");
+        return;
+    }
+    if path.starts_with("transition-ui:") {
+        st.toast(ui, "This transition is design only for now. The engine part comes later.");
         return;
     }
     if path.starts_with("title-ui:") {
