@@ -285,6 +285,7 @@ component Transport inherits HorizontalLayout {
     IconButton { icon: Model.playing ? @image-url("../icons/pause.svg") : @image-url("../icons/play.svg"); active: true; width: 40px; hint: "Play / Pause (Space)"; clicked => { Backend.play-pause(); } }
     IconButton { icon: @image-url("../icons/skip-forward.svg"); hint: "Forward one frame (→)"; clicked => { Backend.step(1); } }
     IconButton { icon: @image-url("../icons/flag.svg"); hint: "Add marker (M)"; clicked => { Backend.add-marker(); } }
+    IconButton { icon: @image-url("../icons/maximize.svg"); hint: "Big screen (F)"; clicked => { Model.big-preview = true; } }
 }
 
 component ToolsMenu inherits Rectangle {
@@ -666,5 +667,20 @@ export component EditorScreen inherits Rectangle {
     Timeline {
         x: 0px; y: root.top-h + 36px; width: parent.width; height: parent.height - root.top-h - 36px;
         pro: root.pro;
+    }
+    // ---------- big screen preview ----------
+    if Model.big-preview: Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height; background: #000000;
+        TouchArea { }
+        if Model.has-preview: Image { x: 0px; y: 0px; width: parent.width; height: parent.height - 64px; source: Model.preview; image-fit: contain; }
+        if !Model.has-preview: Icon { x: (parent.width - 28px) / 2; y: (parent.height - 64px - 28px) / 2; width: 28px; height: 28px; source: @image-url("../icons/film.svg"); tint: Theme.faint; }
+        Text { x: 16px; y: parent.height - 46px; height: 30px; vertical-alignment: center; text: Model.playhead-text + "  /  " + Model.duration-text; color: Theme.text-2; font-size: 12px; }
+        HorizontalLayout {
+            x: 0px; y: parent.height - 46px; width: parent.width; height: 30px; spacing: 6px; alignment: center;
+            IconButton { icon: @image-url("../icons/skip-back.svg"); hint: "Back one frame (←)"; clicked => { Backend.step(-1); } }
+            IconButton { icon: Model.playing ? @image-url("../icons/pause.svg") : @image-url("../icons/play.svg"); active: true; width: 40px; hint: "Play / Pause (Space)"; clicked => { Backend.play-pause(); } }
+            IconButton { icon: @image-url("../icons/skip-forward.svg"); hint: "Forward one frame (→)"; clicked => { Backend.step(1); } }
+        }
+        IconButton { x: parent.width - 46px; y: parent.height - 46px; icon: @image-url("../icons/x.svg"); hint: "Close big screen (Esc)"; clicked => { Model.big-preview = false; } }
     }
 }

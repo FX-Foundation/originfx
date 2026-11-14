@@ -33,7 +33,7 @@ pub struct SysState {
 // ---------------------------------------------------------------- shortcuts
 
 /// id, command, keys in the OriginFX, Classic and Compact presets
-pub const SHORTCUTS: [(&str, &str, [&str; 3]); 22] = [
+pub const SHORTCUTS: [(&str, &str, [&str; 3]); 23] = [
     ("play", "Play / Pause", ["Space", "Space", "Space"]),
     ("split", "Split at playhead", ["K", "Ctrl+K", "S"]),
     ("delete", "Delete selection", ["Delete", "Delete", "Backspace"]),
@@ -56,6 +56,7 @@ pub const SHORTCUTS: [(&str, &str, [&str; 3]); 22] = [
     ("select-tool", "Select tool", ["V", "A", "V"]),
     ("razor-tool", "Razor tool", ["C", "B", "C"]),
     ("ripple-tool", "Ripple trim tool", ["B", "R", "R"]),
+    ("big-screen", "Big screen preview", ["F", "F", "F"]),
 ];
 
 fn binding(st: &State, id: &str) -> String {
@@ -132,6 +133,10 @@ pub fn handle_key(st: &mut State, ui: &App, text: &str, ctrl: bool, shift: bool,
         return true;
     }
     if name == "Escape" {
+        if m.get_big_preview() {
+            m.set_big_preview(false);
+            return true;
+        }
         let s = m.get_screen();
         if s != Screen::Editor && s != Screen::Home && s != Screen::Welcome {
             st.back(ui);
@@ -173,6 +178,12 @@ pub fn handle_key(st: &mut State, ui: &App, text: &str, ctrl: bool, shift: bool,
             "select-tool" => b.invoke_set_tool(0),
             "razor-tool" => b.invoke_set_tool(2),
             "ripple-tool" => b.invoke_set_tool(1),
+            "big-screen" => {
+                let m = ui.global::<Model>();
+                if m.get_screen() == Screen::Editor {
+                    m.set_big_preview(!m.get_big_preview());
+                }
+            }
             _ => {}
         }
     });

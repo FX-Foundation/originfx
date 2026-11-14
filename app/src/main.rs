@@ -116,6 +116,7 @@ impl State {
 
     pub fn go(&mut self, ui: &App, screen: Screen) {
         let m = ui.global::<Model>();
+        m.set_big_preview(false);
         let cur = m.get_screen();
         if cur == screen {
             return;
