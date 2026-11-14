@@ -461,6 +461,8 @@ export global Backend {
     callback open-project-dialog();
     callback open-recent(string);
     callback project-menu-opened(string);
+    pure callback project-folder(string) -> string;
+    callback project-move(string, string);
     callback project-rename(string, string);
     callback project-duplicate(string);
     callback project-reveal(string);

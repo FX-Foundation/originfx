@@ -44,8 +44,8 @@ component ActionCard inherits Rectangle {
     border-width: primary ? 0px : 1px;
     border-color: Theme.border;
     Icon { x: 20px; width: 16px; height: 16px; source: root.icon; tint: root.primary ? Theme.on-accent : Theme.text; }
-    Text { x: 46px; y: 20px; text: root.title; color: root.primary ? Theme.on-accent : Theme.text; font-size: 13px; font-weight: 500; }
-    Text { x: 46px; y: 38px; text: root.sub; color: root.primary ? Theme.on-accent.with-alpha(0.85) : Theme.muted; font-size: 11px; }
+    Text { x: 46px; y: root.sub == "" ? 28px : 20px; text: root.title; color: root.primary ? Theme.on-accent : Theme.text; font-size: 13px; font-weight: 500; }
+    if root.sub != "": Text { x: 46px; y: 38px; text: root.sub; color: root.primary ? Theme.on-accent.with-alpha(0.85) : Theme.muted; font-size: 11px; }
     ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
@@ -54,20 +54,22 @@ export component HomeScreen inherits Rectangle {
     property <int> page: Model.home-page;   // 0 home, 1 projects
     // right-click menu on a project
     property <RecentProject> target;
-    property <int> dialog: 0;               // 0 none, 1 rename, 2 move to trash, 3 properties
+    property <int> dialog: 0;               // 0 none, 1 rename, 2 move to trash, 3 properties, 4 change file location
     property <string> rename-text;
+    property <string> move-text;
     property <string> query;
     property <bool> search-open: false;
     property <length> menu-x;
     property <length> menu-y;
     property <bool> pro: Settings.mode == 2;
-    property <[string]> menu-ids: root.pro ? ["open", "rename", "duplicate", "reveal", "remove", "trash", "copy", "props", "export", "recovery"] : ["open", "rename", "duplicate", "reveal", "remove", "trash"];
-    property <[string]> menu-labels: root.pro ? ["Open", "Rename", "Duplicate", "Show in folder", "Remove from recent", "Move to Trash", "Copy path", "Properties", "Export", "Open autosaved copy"] : ["Open", "Rename", "Duplicate", "Show in folder", "Remove from recent", "Move to Trash"];
+    property <[string]> menu-ids: root.pro ? ["open", "rename", "duplicate", "reveal", "move", "remove", "trash", "copy", "props", "export", "recovery"] : ["open", "rename", "duplicate", "reveal", "move", "remove", "trash"];
+    property <[string]> menu-labels: root.pro ? ["Open", "Rename", "Duplicate", "Show in folder", "Change file location", "Remove from recent", "Move to Trash", "Copy path", "Properties", "Export", "Open autosaved copy"] : ["Open", "Rename", "Duplicate", "Show in folder", "Change file location", "Remove from recent", "Move to Trash"];
     function pick(id: string) {
         if (id == "open") { Backend.open-recent(root.target.path); }
         if (id == "rename") { root.rename-text = root.target.name; root.dialog = 1; }
         if (id == "duplicate") { Backend.project-duplicate(root.target.path); }
         if (id == "reveal") { Backend.project-reveal(root.target.path); }
+        if (id == "move") { root.move-text = Backend.project-folder(root.target.path); root.dialog = 4; }
         if (id == "remove") { Backend.project-remove-recent(root.target.path); }
         if (id == "trash") { root.dialog = 2; }
         if (id == "copy") { Backend.project-copy-path(root.target.path); }
@@ -95,7 +97,7 @@ export component HomeScreen inherits Rectangle {
             padding: 30px; alignment: start;
             spacing: 0px;
             HorizontalLayout {
-                PageTitle { title: root.page == 0 ? "Dashboard" : "Projects"; sub: root.page == 0 ? "Recent projects" : "Everything in " + Model.projects-folder + "."; }
+                PageTitle { title: root.page == 0 ? "Dashboard" : "Projects"; sub: root.page == 0 ? "Create new project" : "Everything in " + Model.projects-folder + "."; }
                 Rectangle { }
                 TextField {
                     width: 240px; height: 32px; placeholder: "Search your projects"; has-icon: true; icon: @image-url("../icons/search.svg");
@@ -105,13 +107,13 @@ export component HomeScreen inherits Rectangle {
                 }
             }
             Rectangle { height: 26px; }
-            HorizontalLayout {
+            if root.page == 0: HorizontalLayout {
                 spacing: 12px;
-                ActionCard { icon: @image-url("../icons/plus.svg"); title: "New project"; sub: "Start from a template"; primary: true; clicked => { Backend.go(Screen.new-project); } }
-                ActionCard { icon: @image-url("../icons/folder.svg"); title: "Open project"; sub: "Find one on your computer"; clicked => { Backend.open-project-dialog(); } }
-                ActionCard { icon: @image-url("../icons/upload.svg"); title: "Import footage"; sub: "Drop clips to begin"; clicked => { Backend.import-footage-dialog(); } }
+                ActionCard { icon: @image-url("../icons/plus.svg"); title: "New project"; primary: true; clicked => { Backend.go(Screen.new-project); } }
+                ActionCard { icon: @image-url("../icons/folder.svg"); title: "Open project"; clicked => { Backend.open-project-dialog(); } }
+                ActionCard { icon: @image-url("../icons/upload.svg"); title: "Import footage"; clicked => { Backend.import-footage-dialog(); } }
             }
-            Rectangle { height: 26px; }
+            if root.page == 0: Rectangle { height: 26px; }
             HorizontalLayout {
                 Text { text: root.page == 0 ? "Recent projects" : "All projects"; color: Theme.text; font-size: 13px; font-weight: 500; }
                 Rectangle { }
@@ -235,7 +237,7 @@ export component HomeScreen inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 400px;
-            height: root.dialog == 1 ? 170px : (root.dialog == 2 ? 170px : 70px + Model.project-props.length * 28px + 54px);
+            height: root.dialog == 1 ? 170px : (root.dialog == 2 ? 170px : (root.dialog == 4 ? 220px : 70px + Model.project-props.length * 28px + 54px));
             background: Theme.panel-bg;
             border-width: 1px;
             border-color: Theme.border;
@@ -243,7 +245,7 @@ export component HomeScreen inherits Rectangle {
             TouchArea { }
             Text {
                 x: 20px; y: 18px; width: parent.width - 40px; overflow: elide;
-                text: root.dialog == 1 ? "Rename project" : (root.dialog == 2 ? "Move to Trash" : root.target.name);
+                text: root.dialog == 1 ? "Rename project" : (root.dialog == 2 ? "Move to Trash" : (root.dialog == 4 ? "Change file location" : root.target.name));
                 color: Theme.text; font-size: 14px; font-weight: 500;
             }
             if root.dialog == 1: TextField {
@@ -256,6 +258,25 @@ export component HomeScreen inherits Rectangle {
                 wrap: word-wrap;
                 text: "\"" + root.target.name + "\" and the media copied into its folder will move to the Trash. You can restore it from there.";
                 color: Theme.text-2; font-size: 12.5px;
+            }
+            if root.dialog == 4: Text {
+                x: 20px; y: 50px; width: parent.width - 40px;
+                wrap: word-wrap;
+                text: "Move \"" + root.target.name + "\" to another folder. Its media moves with it. Type a folder or browse for one.";
+                color: Theme.text-2; font-size: 12.5px;
+            }
+            if root.dialog == 4: TextField {
+                x: 20px; y: 106px; width: parent.width - 40px - 96px;
+                text <=> root.move-text;
+                accepted(t) => { Backend.project-move(root.target.path, t); root.dialog = 0; }
+            }
+            if root.dialog == 4: GhostButton {
+                x: parent.width - 20px - self.width; y: 106px; width: 88px; height: 34px;
+                text: "Browse";
+                clicked => {
+                    let r = Backend.browse-folder("project-move");
+                    if (r != "") { root.move-text = r; }
+                }
             }
             if root.dialog == 3: VerticalLayout {
                 x: 20px; y: 56px; width: parent.width - 40px;
@@ -284,6 +305,16 @@ export component HomeScreen inherits Rectangle {
                 x: parent.width - 20px - self.width; y: parent.height - 52px; width: 128px;
                 text: "Move to Trash";
                 clicked => { Backend.project-trash(root.target.path); root.dialog = 0; }
+            }
+            if root.dialog == 4: GhostButton {
+                x: parent.width - 20px - 88px - 8px - self.width; y: parent.height - 52px; width: 88px;
+                text: "Cancel";
+                clicked => { root.dialog = 0; }
+            }
+            if root.dialog == 4: PrimaryButton {
+                x: parent.width - 20px - self.width; y: parent.height - 52px; width: 88px;
+                text: "Move";
+                clicked => { Backend.project-move(root.target.path, root.move-text); root.dialog = 0; }
             }
             if root.dialog == 3: GhostButton {
                 x: parent.width - 20px - self.width; y: parent.height - 52px; width: 88px;

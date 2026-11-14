@@ -7,7 +7,7 @@ use slint::ComponentHandle;
 use timeline_engine as tl;
 
 use crate::session::Session;
-use crate::settings::{shorten_home, AppSettings};
+use crate::settings::{expand_home, shorten_home, AppSettings};
 use crate::system::{new_project_path, open_project, refresh_recent};
 use crate::{later, util, vec_model, with, App, Backend, Model, Screen, State, KV};
 
@@ -132,6 +132,108 @@ fn trash(st: &mut State, ui: &App, path: &str) {
     }
 }
 
+/// Copy a folder and everything in it (used when a plain rename is not possible, e.g. another drive).
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let dst = to.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copy_dir(&e.path(), &dst)?;
+        } else {
+            std::fs::copy(e.path(), &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// Move a file or folder; fall back to copy and delete when it crosses drives.
+fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    if from.is_dir() {
+        copy_dir(from, to)?;
+        std::fs::remove_dir_all(from)
+    } else {
+        std::fs::copy(from, to)?;
+        std::fs::remove_file(from)
+    }
+}
+
+fn move_project(st: &mut State, ui: &App, path: &str, folder: &str) {
+    let folder = folder.trim();
+    if folder.is_empty() {
+        st.toast(ui, "Enter a folder, or press Browse.");
+        return;
+    }
+    let new_parent = expand_home(folder);
+    let old_file = PathBuf::from(path);
+    let Some(old_dir) = old_file.parent().map(Path::to_path_buf) else { return };
+    let Some(file_name) = old_file.file_name().map(|n| n.to_os_string()) else { return };
+    let stem = old_file.file_stem().map(|s| s.to_os_string());
+    // A project made by OriginFX lives in its own folder (with its media). Move that whole folder.
+    let own_folder = old_dir.file_name().map(|n| n.to_os_string()) == stem;
+    if new_parent.starts_with(&old_dir) {
+        st.toast(ui, "Choose a folder outside the project's own folder.");
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&new_parent) {
+        st.toast(ui, format!("Could not use that folder: {e}"));
+        return;
+    }
+    let (new_file, new_dir) = if own_folder {
+        let d = new_parent.join(old_dir.file_name().unwrap_or_default());
+        (d.join(&file_name), d)
+    } else {
+        (new_parent.join(&file_name), new_parent.clone())
+    };
+    if new_file == old_file {
+        st.toast(ui, "The project is already in that folder.");
+        return;
+    }
+    if new_dir.exists() && own_folder || new_file.exists() {
+        st.toast(ui, "A project with this name is already in that folder.");
+        return;
+    }
+    let res = if own_folder { move_path(&old_dir, &new_dir) } else { move_path(&old_file, &new_file) };
+    if let Err(e) = res {
+        st.toast(ui, format!("Could not move the project: {e}"));
+        return;
+    }
+    // Media copied into the project's folder moved too, so point those links at the new place.
+    let mut relinked_ok = true;
+    if own_folder {
+        match Session::open(&new_file) {
+            Ok(mut s) => {
+                let moved: Vec<_> = s
+                    .project()
+                    .assets()
+                    .iter()
+                    .filter_map(|(id, a)| a.path.strip_prefix(&old_dir).ok().map(|rel| (*id, new_dir.join(rel))))
+                    .collect();
+                for (id, p) in moved {
+                    let _ = s.editor.relink_asset(id, p);
+                }
+                relinked_ok = s.save(&new_file).is_ok();
+            }
+            Err(_) => relinked_ok = false,
+        }
+    }
+    let new_str = new_file.to_string_lossy().to_string();
+    for r in st.settings.recent.iter_mut().filter(|r| r.path == path) {
+        r.path = new_str.clone();
+    }
+    st.settings.hidden.retain(|h| h != path);
+    st.settings.save();
+    refresh_recent(st, ui);
+    if relinked_ok {
+        st.toast(ui, "Project moved.");
+    } else {
+        st.toast(ui, "Project moved. Some media links may need relinking.");
+    }
+}
+
 fn copy_path(st: &mut State, ui: &App, path: &str) {
     match arboard::Clipboard::new().and_then(|mut c| c.set_text(path.to_string())) {
         Ok(()) => st.toast(ui, "Path copied."),
@@ -196,6 +298,17 @@ pub fn wire(ui: &App) {
             let has = !recovery_files(&project_name(Path::new(p.as_str()))).is_empty();
             ui.global::<Model>().set_menu_recovery(has);
         });
+    });
+    b.on_project_folder(|p| {
+        let file = Path::new(p.as_str());
+        let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
+        // A project in its own folder moves as that whole folder, so show the folder that holds it.
+        let own = dir.file_name().map(|n| n.to_os_string()) == file.file_stem().map(|s| s.to_os_string());
+        let shown = if own { dir.parent().map(Path::to_path_buf).unwrap_or(dir.clone()) } else { dir };
+        shorten_home(&shown).into()
+    });
+    b.on_project_move(|p, f| {
+        with(|st, ui| move_project(st, ui, p.as_str(), f.as_str()));
     });
     b.on_project_rename(|p, n| {
         with(|st, ui| rename(st, ui, p.as_str(), n.as_str()));
