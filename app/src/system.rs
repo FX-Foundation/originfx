@@ -661,7 +661,7 @@ fn refresh_lessons(st: &mut State, ui: &App) {
 
 /// name, group, description, length, looks like, path. An empty path means design only for now.
 /// The `transition:N` entries are the eleven that work today.
-const LIB_TRANSITIONS: [(&str, &str, &str, &str, &str, &str); 36] = [
+const LIB_TRANSITIONS: [(&str, &str, &str, &str, &str, &str); 38] = [
     ("Cross dissolve", "Basics", "One clip fades into the next.", "1 second", "Smooth", "transition:0"),
     ("Dip to black", "Basics", "Fades out to black, then in to the next clip.", "1 second", "Smooth", "transition:1"),
     ("Dip to white", "Basics", "Fades out to white, then in to the next clip.", "1 second", "Smooth", "transition:2"),
@@ -698,6 +698,8 @@ const LIB_TRANSITIONS: [(&str, &str, &str, &str, &str, &str); 36] = [
     ("Digital stretch", "Style", "The picture smears and stretches across the cut.", "0.5 seconds", "Digital", ""),
     ("Luma fade", "Style", "The next clip appears in order of brightness.", "1 second", "Smooth", ""),
     ("Ink bleed", "Style", "Ink spreads across the frame to reveal the next clip.", "1.2 seconds", "Organic", ""),
+    ("Save as preset", "My transitions", "Tweak any transition, then save it here under your own name.", "Any", "Yours", ""),
+    ("Import a pack", "My transitions", "Add transitions shared by other creators. Drop a pack into your Library folder.", "Any", "Shared", ""),
 ];
 
 /// name, group, description, length, looks like, path. An empty path means the tile is design only
