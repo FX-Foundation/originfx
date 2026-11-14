@@ -599,10 +599,22 @@ export component LearnScreen inherits Rectangle {
 
 export component LibraryScreen inherits Rectangle {
     background: Theme.page-bg;
-    property <[string]> cats: ["All", "Titles", "Transitions", "Effects", "Music", "Sound effects", "Overlays", "Templates"];
+    property <[string]> cats: ["All", "Primitives", "Titles", "Transitions", "Effects", "Music", "Sound effects", "Overlays", "Templates"];
+    // Model.library-cat holds a kind number; this maps each chip to its kind (Primitives is kind 8).
+    property <[int]> cat-ids: [0, 8, 1, 2, 3, 4, 5, 6, 7];
+    // one icon per primitive, in the same order as PRIMITIVES in system.rs
+    property <[image]> prim-icons: [
+        @image-url("../icons/square.svg"), @image-url("../icons/square.svg"), @image-url("../icons/circle.svg"), @image-url("../icons/shapes.svg"), @image-url("../icons/star.svg"), @image-url("../icons/minus.svg"), @image-url("../icons/arrow-right.svg"), @image-url("../icons/pen.svg"),
+        @image-url("../icons/palette.svg"), @image-url("../icons/sliders-h.svg"), @image-url("../icons/crosshair.svg"), @image-url("../icons/gauge.svg"), @image-url("../icons/pen.svg"), @image-url("../icons/more.svg"), @image-url("../icons/eye.svg"), @image-url("../icons/aperture.svg"), @image-url("../icons/moon.svg"),
+        @image-url("../icons/type.svg"), @image-url("../icons/palette.svg"), @image-url("../icons/book.svg"), @image-url("../icons/wave.svg"),
+        @image-url("../icons/image.svg"), @image-url("../icons/layers.svg"), @image-url("../icons/crosshair.svg"), @image-url("../icons/fit.svg"),
+    ];
     property <LibraryItem> pick: Model.library[Model.library-pick];
     function tint(k: int) -> color {
-        return k == 1 ? Theme.tint-title : k == 2 ? Theme.tint-transition : k == 3 ? Theme.tint-effect : k == 4 ? Theme.tint-music : k == 5 ? Theme.tint-sfx : k == 6 ? Theme.tint-overlay : Theme.tint-title;
+        return k == 1 ? Theme.tint-title : k == 2 ? Theme.tint-transition : k == 3 ? Theme.tint-effect : k == 4 ? Theme.tint-music : k == 5 ? Theme.tint-sfx : k == 6 || k == 8 ? Theme.tint-overlay : Theme.tint-title;
+    }
+    function item-icon(it: LibraryItem) -> image {
+        return it.kind == 8 ? root.prim-icons[it.icon-id] : root.icon(it.kind);
     }
     function icon(k: int) -> image {
         return k == 1 || k == 7 ? @image-url("../icons/type.svg") : k == 2 || k == 3 ? @image-url("../icons/wand.svg") : k == 4 ? @image-url("../icons/music.svg") : k == 5 ? @image-url("../icons/volume.svg") : @image-url("../icons/film.svg");
@@ -632,11 +644,11 @@ export component LibraryScreen inherits Rectangle {
                 spacing: 6px; alignment: start;
                 for c[i] in root.cats: Rectangle {
                     height: 24px; width: ct.preferred-width + (i == 0 ? 20px : 30px);
-                    border-width: 1px; border-color: Model.library-cat == i ? Theme.accent : Theme.border;
-                    background: Model.library-cat == i ? Theme.accent : Theme.card-bg;
-                    if i > 0: Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: i == 1 ? Theme.gold : i == 2 || i == 3 ? Theme.clip-overlay-border : i == 4 || i == 5 ? Theme.success : Theme.accent; }
-                    ct := Text { x: i == 0 ? 10px : 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == i ? Theme.on-accent : Theme.text; font-size: 11px; }
-                    TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = i; Backend.library-filter(Model.library-filter); } }
+                    border-width: 1px; border-color: Model.library-cat == root.cat-ids[i] ? Theme.accent : Theme.border;
+                    background: Model.library-cat == root.cat-ids[i] ? Theme.accent : Theme.card-bg;
+                    if i > 0: Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: root.cat-ids[i] == 1 ? Theme.gold : root.cat-ids[i] == 2 || root.cat-ids[i] == 3 ? Theme.clip-overlay-border : root.cat-ids[i] == 4 || root.cat-ids[i] == 5 ? Theme.success : Theme.accent; }
+                    ct := Text { x: i == 0 ? 10px : 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == root.cat-ids[i] ? Theme.on-accent : Theme.text; font-size: 11px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = root.cat-ids[i]; Backend.library-filter(Model.library-filter); } }
                 }
             }
             Rectangle { height: 16px; }
@@ -654,7 +666,7 @@ export component LibraryScreen inherits Rectangle {
                     name: it.name;
                     sub: it.kind-text;
                     tint: root.tint(it.kind);
-                    icon: root.icon(it.kind);
+                    icon: root.item-icon(it);
                     selected: Model.library-pick == i;
                     clicked => { Model.library-pick = i; Backend.library-select(i); }
                     double-clicked => { Backend.library-add(i); }
@@ -670,7 +682,7 @@ export component LibraryScreen inherits Rectangle {
             x: 20px; y: 20px; width: parent.width - 40px; spacing: 10px; alignment: start;
             Rectangle {
                 height: 110px; background: root.tint(root.pick.kind);
-                Icon { width: 20px; height: 20px; source: root.icon(root.pick.kind); tint: Theme.text; opacity: 0.8; }
+                Icon { width: 20px; height: 20px; source: root.item-icon(root.pick); tint: Theme.text; opacity: 0.8; }
             }
             Text { text: root.pick.name; color: Theme.text; font-size: 15px; font-weight: 500; }
             HorizontalLayout { alignment: start; Chip { text: root.pick.kind-text; kind: 4; } }

@@ -659,9 +659,54 @@ fn refresh_lessons(st: &mut State, ui: &App) {
 
 // ---------------------------------------------------------------- library
 
+/// name, group, description, looks like. Order must match `prim-icons` in start.slint.
+const PRIMITIVES: [(&str, &str, &str, &str); 25] = [
+    ("Rectangle", "Shape", "A box. Each corner can be rounded on its own.", "Solid"),
+    ("Rounded rectangle", "Shape", "A box with soft corners, set with one radius slider.", "Soft"),
+    ("Ellipse", "Shape", "A circle or an oval.", "Round"),
+    ("Polygon", "Shape", "A shape with 3 to 12 straight sides.", "Angular"),
+    ("Star", "Shape", "Set the number of points and how deep they cut in.", "Pointed"),
+    ("Line", "Shape", "A straight line with round, square or arrow ends. Can be dashed.", "Thin"),
+    ("Arrow", "Shape", "A line with an arrowhead. Good for pointing at things.", "Thin"),
+    ("Free path", "Shape", "Draw any curve with the pen.", "Custom"),
+    ("Solid fill", "Fill and outline", "One flat colour for a shape or for text.", "Flat"),
+    ("Linear gradient", "Fill and outline", "A colour that fades from one side to the other.", "Smooth"),
+    ("Radial gradient", "Fill and outline", "A colour that fades outward from a centre point.", "Smooth"),
+    ("Angular gradient", "Fill and outline", "A colour that sweeps around a centre like a clock face.", "Smooth"),
+    ("Outline", "Fill and outline", "A border with its own width, colour and corner style.", "Crisp"),
+    ("Dashed outline", "Fill and outline", "An outline made of dashes or dots.", "Crisp"),
+    ("Opacity", "Fill and outline", "How see-through a shape or text is.", "Soft"),
+    ("Blur", "Fill and outline", "Softens the edges of one element, not the whole picture.", "Soft"),
+    ("Shadow", "Fill and outline", "A soft shadow behind a shape or text.", "Soft"),
+    ("Text block", "Text", "One or many lines with font, size, weight, spacing and alignment.", "Clean"),
+    ("Mixed styling", "Text", "A different colour or weight on a single word.", "Clean"),
+    ("Fonts and features", "Text", "Variable fonts and stylistic alternates, bundled so every computer shows the same thing.", "Clean"),
+    ("Text on a curve", "Text", "Words that follow a path.", "Flowing"),
+    ("Background", "Helper", "A full-frame solid colour or gradient.", "Flat"),
+    ("Group", "Helper", "Several elements that move together as one.", "Neutral"),
+    ("Anchor", "Helper", "The point a shape rotates and scales around.", "Neutral"),
+    ("Safe area", "Helper", "A guide so titles never get cropped on TVs and phones.", "Neutral"),
+];
+
 pub fn refresh_library(st: &mut State, ui: &App) {
     let mut all: Vec<LibraryItem> = Vec::new();
     let mut id = 0;
+    for (n, (name, group, desc, looks)) in PRIMITIVES.iter().enumerate() {
+        all.push(LibraryItem {
+            id,
+            name: (*name).into(),
+            kind: 8,
+            kind_text: (*group).into(),
+            desc: (*desc).into(),
+            length: "Any".into(),
+            works_on: "Titles and graphics".into(),
+            looks_like: (*looks).into(),
+            favorite: false,
+            path: format!("primitive:{n}").into(),
+            icon_id: n as i32,
+        });
+        id += 1;
+    }
     let mut push = |name: &str, kind: i32, kt: &str, desc: &str, len: &str, works: &str, looks: &str, path: &str| {
         all.push(LibraryItem {
             id,
@@ -674,6 +719,7 @@ pub fn refresh_library(st: &mut State, ui: &App) {
             looks_like: looks.into(),
             favorite: false,
             path: path.into(),
+            icon_id: 0,
         });
         id += 1;
     };
@@ -722,6 +768,10 @@ fn library_add(st: &mut State, ui: &App, i: i32) {
     let m = ui.global::<Model>();
     let Some(item) = m.get_library().row_data(i.max(0) as usize) else { return };
     let path = item.path.to_string();
+    if path.starts_with("primitive:") {
+        st.toast(ui, "Primitives are not wired into the engine yet.");
+        return;
+    }
     if st.session.is_none() {
         st.toast(ui, "Open or create a project first.");
         return;
