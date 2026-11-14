@@ -14,7 +14,7 @@ use timeline_engine as tl;
 
 use crate::session::Session;
 use crate::settings::{expand_home, shorten_home, AppSettings};
-use crate::{later, strings, util, vec_model, with, App, Backend, LessonItem, LibraryItem, Model, PluginItem, RecentProject, Row4, Screen, Settings, ShortcutItem, State};
+use crate::{later, strings, util, vec_model, with, App, Backend, LessonItem, LibraryHead, LibraryItem, Model, PluginItem, RecentProject, Row4, Screen, Settings, ShortcutItem, State};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const REPO: &str = "https://github.com/FX-Foundation/originfx";
@@ -704,6 +704,8 @@ pub fn refresh_library(st: &mut State, ui: &App) {
             favorite: false,
             path: format!("primitive:{n}").into(),
             icon_id: n as i32,
+            col: 0,
+            y: 0,
         });
         id += 1;
     }
@@ -720,6 +722,8 @@ pub fn refresh_library(st: &mut State, ui: &App) {
             favorite: false,
             path: path.into(),
             icon_id: 0,
+            col: 0,
+            y: 0,
         });
         id += 1;
     };
@@ -761,7 +765,55 @@ fn filter_library(st: &mut State, ui: &App) {
     if m.get_library_pick() as usize >= items.len() {
         m.set_library_pick(0);
     }
-    m.set_library(vec_model(items));
+    m.set_library(vec_model(layout_library(items, cat == 8, &m)));
+}
+
+/// Places tiles on a 4-column grid. The Primitives view is split into sections (Shapes, Fill and
+/// outline, Text, Helpers), each with its own heading and its own grid.
+fn layout_library(mut items: Vec<LibraryItem>, sectioned: bool, m: &Model<'_>) -> Vec<LibraryItem> {
+    const COLS: usize = 4;
+    const ROW: i32 = 118;
+    const HEAD: i32 = 28;
+    const GAP: i32 = 14;
+    let mut heads: Vec<LibraryHead> = Vec::new();
+    let mut y = 0;
+    if sectioned {
+        let mut prev = String::new();
+        let mut k = 0usize;
+        let mut rows_open = false;
+        for it in items.iter_mut() {
+            if it.kind_text.as_str() != prev {
+                if rows_open {
+                    y += (k.div_ceil(COLS) as i32) * ROW + GAP;
+                }
+                let title = match it.kind_text.as_str() {
+                    "Shape" => "Shapes",
+                    "Helper" => "Helpers",
+                    other => other,
+                };
+                heads.push(LibraryHead { title: title.into(), y });
+                y += HEAD;
+                prev = it.kind_text.to_string();
+                k = 0;
+                rows_open = true;
+            }
+            it.col = (k % COLS) as i32;
+            it.y = y + (k / COLS) as i32 * ROW;
+            k += 1;
+        }
+        if rows_open {
+            y += (k.div_ceil(COLS) as i32) * ROW;
+        }
+    } else {
+        for (i, it) in items.iter_mut().enumerate() {
+            it.col = (i % COLS) as i32;
+            it.y = (i / COLS) as i32 * ROW;
+        }
+        y = (items.len().div_ceil(COLS) as i32) * ROW;
+    }
+    m.set_library_heads(vec_model(heads));
+    m.set_library_h(if items.is_empty() { 80 } else { y });
+    items
 }
 
 fn library_add(st: &mut State, ui: &App, i: i32) {

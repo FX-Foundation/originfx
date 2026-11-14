@@ -104,7 +104,9 @@ export struct KV { k: string, v: string }
 
 export struct Row4 { a: string, b: string, c: string, d: string, status: int, status-text: string }
 
-export struct LibraryItem { id: int, name: string, kind: int, kind-text: string, desc: string, length: string, works-on: string, looks-like: string, favorite: bool, path: string, icon-id: int }
+export struct LibraryItem { id: int, name: string, kind: int, kind-text: string, desc: string, length: string, works-on: string, looks-like: string, favorite: bool, path: string, icon-id: int, col: int, y: int }
+
+export struct LibraryHead { title: string, y: int }
 
 export struct TakeItem { name: string, duration: string, path: string, selected: bool }
 
@@ -226,6 +228,8 @@ export global Model {
     in-out property <int> lessons-done: 0;
     in-out property <int> current-lesson: 0;
     in-out property <[LibraryItem]> library;
+    in-out property <[LibraryHead]> library-heads;
+    in-out property <int> library-h: 80;
     in-out property <int> library-cat: 0;
     in-out property <int> library-pick: 0;
     in-out property <string> library-filter;

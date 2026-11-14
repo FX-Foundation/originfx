@@ -1,6 +1,6 @@
 // Section A: Home, Projects, New project, Learn, Library, Project settings.
 import { Theme, Settings } from "../theme.slint";
-import { Model, Backend, Screen, RecentProject, LessonItem, LibraryItem } from "../store.slint";
+import { Model, Backend, Screen, RecentProject, LessonItem, LibraryItem, LibraryHead } from "../store.slint";
 import { Brand, Icon, PrimaryButton, GhostButton, Segmented, SegItem, SettingRow, SummaryRow, NavSidebar, TextField, SectionLabel, Chip, Tile, Card, ProgressBar, Placeholder, ToolTopBar, Divider, PageTitle, Hint } from "../components.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -656,11 +656,12 @@ export component LibraryScreen inherits Rectangle {
             property <length> gap: 10px;
             property <length> cw: (self.width - 60px - (cols - 1) * gap) / cols;
             Rectangle {
-                height: Model.library.length == 0 ? 80px : ceil(Model.library.length / cols) * 118px;
+                height: Model.library-h * 1px;
                 if Model.library.length == 0: Text { x: 0px; y: 10px; text: "Nothing here yet. Music, sound effects and overlays come from " + Model.projects-folder + "/Library."; color: Theme.muted; font-size: 12px; }
+                for h in Model.library-heads: Text { x: 0px; y: h.y * 1px; height: 22px; vertical-alignment: center; text: h.title; color: Theme.text; font-size: 12px; font-weight: 500; }
                 for it[i] in Model.library: Tile {
-                    x: mod(i, cols) * (cw + gap);
-                    y: floor(i / cols) * 118px;
+                    x: it.col * (cw + gap);
+                    y: it.y * 1px;
                     width: cw;
                     thumb-h: 72px;
                     name: it.name;
