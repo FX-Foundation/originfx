@@ -766,6 +766,213 @@ const PRIMITIVES: [(&str, &str, &str, &str); 25] = [
     ("Safe area", "Helper", "A guide so titles never get cropped on TVs and phones.", "Neutral"),
 ];
 
+/// name, group, description, looks like, real effect (name in EFFECT_TILES, or empty for design only).
+const LIB_EFFECTS: [(&str, &str, &str, &str, &str); 54] = [
+    ("Brightness", "Light", "Make the picture lighter or darker.", "Light", "Brightness"),
+    ("Exposure", "Light", "Like opening or closing the camera lens.", "Light", "Exposure"),
+    ("Contrast", "Light", "Push darks darker and lights lighter.", "Punchy", "Contrast"),
+    ("Gamma", "Light", "Change the middle tones without touching black and white.", "Soft", "Gamma"),
+    ("Shadows and highlights", "Light", "Rescue dark corners and blown-out skies separately.", "Natural", ""),
+    ("Vignette", "Light", "Darken the edges to pull the eye to the centre.", "Moody", "Vignette"),
+    ("Saturation", "Color", "How strong or washed out the colours are.", "Vivid", "Saturation"),
+    ("Hue shift", "Color", "Rotate every colour around the wheel.", "Wild", "Hue shift"),
+    ("Temperature", "Color", "Warmer like sunset or cooler like shade.", "Warm", "Temperature"),
+    ("Tint", "Color", "Slide between green and magenta.", "Subtle", ""),
+    ("Vibrance", "Color", "Boost dull colours and leave strong ones alone.", "Natural", ""),
+    ("Black and white", "Color", "Remove all colour.", "Classic", "Black and white"),
+    ("Sepia", "Color", "An old brown photograph look.", "Vintage", "Sepia"),
+    ("Invert", "Color", "Flip every colour to its opposite.", "Wild", "Invert"),
+    ("Curves", "Color grade", "Draw your own tone curve, per colour channel if you like.", "Pro", ""),
+    ("Colour wheels", "Color grade", "Tint shadows, mid-tones and highlights separately.", "Pro", ""),
+    ("LUT", "Color grade", "Import a .cube look file made in any other grading tool.", "Pro", ""),
+    ("Teal and orange", "Color grade", "The blockbuster look: cool shadows, warm skin.", "Cinematic", ""),
+    ("Film look", "Color grade", "Lifted blacks and soft colours like real film stock.", "Cinematic", ""),
+    ("Match colour", "Color grade", "Make one clip look like another in one click.", "Smart", ""),
+    ("Gaussian blur", "Blur and sharpen", "A smooth, even blur.", "Soft", "Gaussian blur"),
+    ("Sharpen", "Blur and sharpen", "Bring out fine detail.", "Crisp", "Sharpen"),
+    ("Motion blur", "Blur and sharpen", "Smear the picture in one direction like fast movement.", "Fast", ""),
+    ("Radial blur", "Blur and sharpen", "Spin or zoom blur from a centre point.", "Fast", ""),
+    ("Tilt-shift", "Blur and sharpen", "Blur the top and bottom so the scene looks like a tiny model.", "Miniature", ""),
+    ("Lens blur", "Blur and sharpen", "Round, camera-style blur with bright bokeh discs.", "Dreamy", ""),
+    ("Mosaic", "Stylize", "Big blocky pixels.", "Blocky", "Mosaic"),
+    ("Posterize", "Stylize", "Cut the picture down to a few flat colour levels.", "Graphic", ""),
+    ("Halftone", "Stylize", "Newspaper-style dots.", "Print", ""),
+    ("Edge glow", "Stylize", "Neon light along every edge.", "Neon", ""),
+    ("Cartoon outline", "Stylize", "Flat colours with ink lines.", "Comic", ""),
+    ("Duotone", "Stylize", "Paint the picture with just two colours.", "Graphic", ""),
+    ("Pixel art", "Stylize", "Retro game pixels with a limited palette.", "Retro", ""),
+    ("Mirror", "Distort", "Reflect one half of the picture onto the other.", "Symmetric", ""),
+    ("Kaleidoscope", "Distort", "Repeat a slice of the picture in a circle.", "Trippy", ""),
+    ("Wave", "Distort", "Ripple the picture like water.", "Fluid", ""),
+    ("Fisheye", "Distort", "A bulging wide-angle lens.", "Action", ""),
+    ("Twirl", "Distort", "Spin the middle of the picture into a whirl.", "Trippy", ""),
+    ("Denoise", "Cleanup", "Clean up grain from dark, noisy footage.", "Clean", ""),
+    ("Deflicker", "Cleanup", "Even out flickering lights and time-lapse jumps.", "Clean", ""),
+    ("Stabilise", "Cleanup", "Calm down shaky handheld footage.", "Smooth", ""),
+    ("Defog", "Cleanup", "Cut through haze and mist.", "Clear", ""),
+    ("One-click auto-fix", "Cleanup", "Fixes exposure and colour for you. Undo if you don't like it.", "Smart", ""),
+    ("Background remover", "Keying and masks", "Cut out a person from any background, no green screen needed.", "Smart", ""),
+    ("Green screen key", "Keying and masks", "Remove a green or blue backdrop.", "Studio", ""),
+    ("Luma key", "Keying and masks", "Remove the brightest or darkest parts.", "Studio", ""),
+    ("Colour key", "Keying and masks", "Remove any single colour you pick.", "Studio", ""),
+    ("Edge cleanup", "Keying and masks", "Remove green fringes around a keyed subject.", "Studio", ""),
+    ("Soft mask edge", "Keying and masks", "Feather the border of any mask.", "Soft", ""),
+    ("Film grain", "Film and noise", "Fine grain like real film.", "Vintage", ""),
+    ("Halation", "Film and noise", "A red glow around bright lights, like old film.", "Vintage", ""),
+    ("Chromatic aberration", "Film and noise", "Colour fringes at the edges, like a cheap lens.", "Glitchy", ""),
+    ("Scanlines", "Film and noise", "Old TV lines.", "Retro", ""),
+    ("Noise", "Film and noise", "Random speckle you control.", "Rough", ""),
+];
+
+/// name, group, description, length, looks like
+const LIB_MUSIC: [(&str, &str, &str, &str, &str); 22] = [
+    ("Slow horizon", "Cinematic", "Wide strings and a soft piano for opening shots.", "2:30", "Emotional"),
+    ("Last light", "Cinematic", "A warm, rising theme for a story's ending.", "2:10", "Warm"),
+    ("Open road", "Cinematic", "Steady, hopeful movement for travel footage.", "2:45", "Hopeful"),
+    ("Quiet city", "Cinematic", "Soft and thoughtful, good under narration.", "3:00", "Calm"),
+    ("Sunny side", "Upbeat", "Bright claps and ukulele. Instant good mood.", "2:00", "Happy"),
+    ("Good vibes", "Upbeat", "Funky bass and a tight groove.", "2:20", "Fun"),
+    ("Run it", "Upbeat", "Driving drums for sport and fitness.", "2:05", "Energetic"),
+    ("Pop spark", "Upbeat", "Light, catchy and made for short videos.", "1:30", "Bouncy"),
+    ("Late tea", "Lo-fi", "Dusty beat, warm keys.", "2:40", "Chill"),
+    ("Rainy desk", "Lo-fi", "Slow drums with soft rain in the background.", "3:00", "Cosy"),
+    ("Study loop", "Lo-fi", "A steady loop that never gets in the way.", "2:00", "Focus"),
+    ("Clean slide", "Corporate", "Polished and positive for company videos.", "2:15", "Professional"),
+    ("Big plans", "Corporate", "Steady build, great for product launches.", "2:30", "Confident"),
+    ("Pitch day", "Corporate", "Light, modern and neutral.", "2:00", "Neutral"),
+    ("Closing in", "Tension", "Low pulses that slowly get tighter.", "2:10", "Dark"),
+    ("Cold room", "Tension", "Thin, uneasy textures for thrillers.", "2:30", "Eerie"),
+    ("Heartbeat", "Tension", "A slow pulse under a rising drone.", "1:45", "Suspense"),
+    ("Rise of kings", "Epic and trailer", "Huge drums and a heroic brass theme.", "2:40", "Heroic"),
+    ("Final stand", "Epic and trailer", "Fast, dense and loud for action.", "2:20", "Intense"),
+    ("Title drop", "Epic and trailer", "A short hit-and-build for trailers and reveals.", "1:00", "Dramatic"),
+    ("Soft focus", "Ambient", "A drifting pad with no beat.", "3:30", "Floating"),
+    ("Deep water", "Ambient", "Slow, deep tones for calm scenes.", "4:00", "Peaceful"),
+];
+
+/// name, group, description, length, looks like
+const LIB_SFX: [(&str, &str, &str, &str, &str); 60] = [
+    ("Fast whoosh", "Whooshes and hits", "A quick air swipe.", "0:01", "Sharp"),
+    ("Slow whoosh", "Whooshes and hits", "A long, soft pass-by.", "0:02", "Smooth"),
+    ("Whip pan", "Whooshes and hits", "A fast swish with a tail.", "0:01", "Fast"),
+    ("Swipe", "Whooshes and hits", "A light sweep for text and graphics.", "0:01", "Light"),
+    ("Punch hit", "Whooshes and hits", "A short, tight hit.", "0:01", "Tight"),
+    ("Slap hit", "Whooshes and hits", "A crisp, bright smack.", "0:01", "Bright"),
+    ("Sword swish", "Whooshes and hits", "A metal blade through the air.", "0:01", "Metal"),
+    ("Arrow pass", "Whooshes and hits", "Something thin flying past the ear.", "0:01", "Thin"),
+    ("Deep boom", "Impacts and booms", "A heavy low boom.", "0:03", "Heavy"),
+    ("Cinematic hit", "Impacts and booms", "A big trailer-style slam.", "0:03", "Trailer"),
+    ("Door slam", "Impacts and booms", "A solid wooden thud.", "0:02", "Solid"),
+    ("Metal clang", "Impacts and booms", "A heavy metal strike with a ring.", "0:02", "Ringing"),
+    ("Explosion", "Impacts and booms", "A rumbling blast with debris.", "0:04", "Loud"),
+    ("Glass break", "Impacts and booms", "A crash of glass shards.", "0:02", "Sharp"),
+    ("Riser short", "Risers and drones", "A 3-second build to a cut.", "0:03", "Rising"),
+    ("Riser long", "Risers and drones", "A 8-second build for reveals.", "0:08", "Rising"),
+    ("Reverse swell", "Risers and drones", "A backwards sound sweeping into a hit.", "0:04", "Reverse"),
+    ("Low drone", "Risers and drones", "A deep, steady rumble.", "0:10", "Dark"),
+    ("Tension drone", "Risers and drones", "A thin, uneasy hum.", "0:10", "Eerie"),
+    ("Heartbeat pulse", "Risers and drones", "A slow, deep beat.", "0:08", "Pulse"),
+    ("Button click", "UI and clicks", "A small, clean click.", "0:01", "Clean"),
+    ("Toggle on", "UI and clicks", "A switch turning on.", "0:01", "Clean"),
+    ("Toggle off", "UI and clicks", "A switch turning off.", "0:01", "Clean"),
+    ("Notification", "UI and clicks", "A friendly two-note ping.", "0:01", "Friendly"),
+    ("Success chime", "UI and clicks", "A bright chime for done and correct.", "0:01", "Bright"),
+    ("Error tone", "UI and clicks", "A short low buzz for wrong.", "0:01", "Low"),
+    ("Pop", "UI and clicks", "A small bubble pop.", "0:01", "Light"),
+    ("Typing", "UI and clicks", "Keyboard keys in a quick burst.", "0:03", "Busy"),
+    ("Footsteps on wood", "Foley", "A person walking indoors.", "0:06", "Natural"),
+    ("Footsteps on gravel", "Foley", "Walking outside on small stones.", "0:06", "Natural"),
+    ("Door open", "Foley", "A door creaking open.", "0:02", "Natural"),
+    ("Door close", "Foley", "A door closing gently.", "0:01", "Natural"),
+    ("Cloth movement", "Foley", "Jacket and fabric rustle.", "0:03", "Soft"),
+    ("Paper shuffle", "Foley", "Sheets moving on a desk.", "0:03", "Soft"),
+    ("Cup on table", "Foley", "A mug set down.", "0:01", "Natural"),
+    ("Camera shutter", "Foley", "A photo being taken.", "0:01", "Crisp"),
+    ("Rain", "Nature", "Steady rain on the ground.", "0:30", "Soft"),
+    ("Thunder", "Nature", "A distant rolling rumble.", "0:08", "Deep"),
+    ("Wind", "Nature", "Wind through open space.", "0:30", "Airy"),
+    ("Birds", "Nature", "Morning birdsong.", "0:30", "Bright"),
+    ("Waves", "Nature", "Gentle sea waves.", "0:30", "Calm"),
+    ("Fire crackle", "Nature", "A small campfire.", "0:30", "Warm"),
+    ("Quiet room", "Room tones", "The hush of an empty room.", "0:30", "Quiet"),
+    ("Office hum", "Room tones", "Air conditioning and distant keys.", "0:30", "Steady"),
+    ("Cafe chatter", "Room tones", "Murmur and cups, nothing clear.", "0:30", "Busy"),
+    ("Street traffic", "Room tones", "Cars and the city outside.", "0:30", "Busy"),
+    ("Crowd", "Room tones", "A large group talking and cheering.", "0:30", "Loud"),
+    ("Night crickets", "Room tones", "A warm night outdoors.", "0:30", "Calm"),
+    ("Laser", "Sci-fi and digital", "A bright energy shot.", "0:01", "Bright"),
+    ("Power up", "Sci-fi and digital", "Energy rising in pitch.", "0:02", "Rising"),
+    ("Power down", "Sci-fi and digital", "Energy falling away.", "0:02", "Falling"),
+    ("Glitch", "Sci-fi and digital", "A short digital stutter.", "0:01", "Glitchy"),
+    ("Data beeps", "Sci-fi and digital", "A computer chattering.", "0:03", "Busy"),
+    ("Hologram", "Sci-fi and digital", "A shimmering appear sound.", "0:02", "Shimmer"),
+    ("Whip transition", "Transition sounds", "Matches Whip pan and Slide.", "0:01", "Fast"),
+    ("Zoom transition", "Transition sounds", "Matches Zoom and Spin.", "0:01", "Rising"),
+    ("Glitch transition", "Transition sounds", "Matches Glitch and RGB split.", "0:01", "Glitchy"),
+    ("Flash transition", "Transition sounds", "Matches Flash and Light leak.", "0:01", "Bright"),
+    ("Fade transition", "Transition sounds", "Matches Dissolve and Fade.", "0:02", "Soft"),
+    ("Page transition", "Transition sounds", "Matches Page turn and Peel.", "0:01", "Natural"),
+];
+
+/// name, group, description, length, looks like
+const LIB_OVERLAYS: [(&str, &str, &str, &str, &str); 31] = [
+    ("Warm leak", "Light leaks", "An orange glow sweeping over the picture.", "0:03", "Warm"),
+    ("Cool leak", "Light leaks", "A blue and pink flare.", "0:03", "Cool"),
+    ("Sun flare", "Light leaks", "A bright flare from one corner.", "0:04", "Bright"),
+    ("Film burn", "Light leaks", "A fiery flash like a film strip burning.", "0:02", "Hot"),
+    ("Fine dust", "Dust and film grain", "Small specks floating over the shot.", "0:10", "Subtle"),
+    ("Heavy dust", "Dust and film grain", "Thick particles and scratches.", "0:10", "Rough"),
+    ("8mm grain", "Dust and film grain", "Chunky home-movie grain.", "0:10", "Vintage"),
+    ("35mm grain", "Dust and film grain", "Fine cinema grain.", "0:10", "Cinematic"),
+    ("Soft bokeh", "Bokeh and particles", "Blurry round lights drifting.", "0:10", "Dreamy"),
+    ("Gold sparks", "Bokeh and particles", "Shining particles rising.", "0:10", "Festive"),
+    ("Floating dots", "Bokeh and particles", "Slow white dots in the air.", "0:10", "Calm"),
+    ("Fireflies", "Bokeh and particles", "Tiny lights that blink and drift.", "0:10", "Magic"),
+    ("Thin frame", "Frames and borders", "A simple line border.", "Still", "Clean"),
+    ("Polaroid", "Frames and borders", "A white photo frame with a caption space.", "Still", "Vintage"),
+    ("Film strip", "Frames and borders", "Sprocket holes on the edges.", "Still", "Vintage"),
+    ("Rounded corners", "Frames and borders", "Soft-cornered screen with a dark background.", "Still", "Soft"),
+    ("Glitch burst", "Glitch and VHS", "A quick block of digital noise.", "0:02", "Glitchy"),
+    ("VHS tape", "Glitch and VHS", "Tracking lines and colour bleed.", "0:10", "Retro"),
+    ("Old TV", "Glitch and VHS", "A curved screen with static.", "0:10", "Retro"),
+    ("Moving lines", "Animated lines and shapes", "Thin lines sliding across the frame.", "0:05", "Clean"),
+    ("Corner brackets", "Animated lines and shapes", "Viewfinder corners that draw on.", "0:03", "Tech"),
+    ("Shape burst", "Animated lines and shapes", "Simple shapes popping outward.", "0:03", "Fun"),
+    ("Rain", "Weather", "Rain streaks over the picture.", "0:10", "Moody"),
+    ("Snow", "Weather", "Soft falling snow.", "0:10", "Calm"),
+    ("Fog", "Weather", "Slow drifting mist.", "0:10", "Eerie"),
+    ("Countdown 3-2-1", "Countdown and timer", "A clean number countdown.", "0:03", "Bold"),
+    ("Timer bar", "Countdown and timer", "A bar that fills over time.", "0:10", "Clean"),
+    ("Cinema bars", "Letterbox bars", "Black bars for a widescreen look.", "Still", "Cinematic"),
+    ("Subscribe button", "Subscribe and like", "A generic button that slides in and taps.", "0:04", "Social"),
+    ("Like and bell", "Subscribe and like", "A thumb and a bell that wiggle.", "0:03", "Social"),
+    ("Follow prompt", "Subscribe and like", "A swipe-up style call to action.", "0:03", "Social"),
+];
+
+/// name, group, description, length, looks like
+const LIB_TEMPLATES: [(&str, &str, &str, &str, &str); 20] = [
+    ("YouTube intro", "Social and creator", "A 5-second channel opener with logo and tagline.", "0:05", "Bold"),
+    ("Vlog opening", "Social and creator", "Quick cuts, big title and a date.", "0:10", "Fun"),
+    ("Reel and Short hook", "Social and creator", "A vertical 9:16 hook that stops the scroll.", "0:03", "Punchy"),
+    ("Podcast clip", "Social and creator", "Waveform, speaker names and live captions.", "0:30", "Clean"),
+    ("Gaming highlight", "Social and creator", "Zoom, shake and flash for the big play.", "0:15", "Intense"),
+    ("Unboxing", "Social and creator", "Reveal, close-up and a rating card.", "0:30", "Fun"),
+    ("15-second product ad", "Business", "Hook, three benefits and a price.", "0:15", "Slick"),
+    ("Event promo", "Business", "Date, place and a fast preview.", "0:30", "Energetic"),
+    ("Tutorial", "Business", "Numbered steps with callouts.", "1:00", "Clear"),
+    ("Launch countdown", "Business", "Days-to-go build-up with a big reveal.", "0:15", "Dramatic"),
+    ("Real estate walkthrough", "Business", "Room names, size labels and a price.", "1:00", "Elegant"),
+    ("Fitness promo", "Business", "Hard cuts, a timer and bold text.", "0:20", "Intense"),
+    ("Interview", "Story and news", "Lower thirds, pull quotes and B-roll slots.", "2:00", "Professional"),
+    ("Documentary opener", "Story and news", "Slow reveal, a big title and a year.", "0:30", "Cinematic"),
+    ("Lyric video", "Story and news", "Words timed to the music.", "3:00", "Moody"),
+    ("News bulletin", "Story and news", "A headline bar, a ticker and a studio frame.", "1:00", "Formal"),
+    ("Memories slideshow", "Memories", "Photos with slow zoom and soft music.", "1:30", "Warm"),
+    ("Travel recap", "Memories", "A map line, place names and quick clips.", "1:00", "Adventurous"),
+    ("Wedding highlight", "Memories", "Gentle titles, soft light and names.", "2:00", "Romantic"),
+    ("Birthday wishes", "Memories", "Balloons, a name and a message.", "0:30", "Joyful"),
+];
+
 pub fn refresh_library(st: &mut State, ui: &App) {
     let mut all: Vec<LibraryItem> = Vec::new();
     let mut id = 0;
@@ -831,7 +1038,7 @@ pub fn refresh_library(st: &mut State, ui: &App) {
         });
         id += 1;
     }
-    let mut push = |name: &str, kind: i32, kt: &str, desc: &str, len: &str, works: &str, looks: &str, path: &str| {
+    let mut push = |name: &str, kind: i32, kt: &str, desc: &str, len: &str, works: &str, looks: &str, path: &str, group: &str| {
         all.push(LibraryItem {
             id,
             name: name.into(),
@@ -844,15 +1051,38 @@ pub fn refresh_library(st: &mut State, ui: &App) {
             favorite: false,
             path: path.into(),
             icon_id: 0,
-            group: String::new().into(),
+            group: group.into(),
             col: 0,
             y: 0,
         });
         id += 1;
     };
-    for (n, k, cat, _) in crate::tools::EFFECT_TILES.iter() {
-        let idx = tl::EffectKind::ALL.iter().position(|x| x == k).unwrap_or(0);
-        push(n, 3, "Effect", &format!("{cat} effect for pictures. Every setting can be keyframed."), "Clip length", "Video clips", cat, &format!("effect:{idx}"));
+    for (n, (name, group, desc, looks, real)) in LIB_EFFECTS.iter().enumerate() {
+        let real_idx = crate::tools::EFFECT_TILES.iter().find(|t| t.0 == *real).map(|t| tl::EffectKind::ALL.iter().position(|x| *x == t.1).unwrap_or(0));
+        push(
+            name,
+            3,
+            "Effect",
+            desc,
+            "Clip length",
+            "Video clips",
+            looks,
+            &match real_idx {
+                Some(idx) => format!("effect:{idx}"),
+                None => format!("effect-ui:{n}"),
+            },
+            group,
+        );
+    }
+    for (kind, kt, works, ui_tag, list) in [
+        (4, "Music", "Audio tracks", "music-ui", &LIB_MUSIC[..]),
+        (5, "Sound effect", "Audio tracks", "sfx-ui", &LIB_SFX[..]),
+        (6, "Overlay", "Video tracks", "overlay-ui", &LIB_OVERLAYS[..]),
+        (7, "Template", "New projects", "template-ui", &LIB_TEMPLATES[..]),
+    ] {
+        for (n, (name, group, desc, len, looks)) in list.iter().enumerate() {
+            push(name, kind, kt, desc, len, works, looks, &format!("{ui_tag}:{n}"), group);
+        }
     }
     let lib = st.settings.storage_dir().join("Library");
     for (folder, kind, kt) in [("Music", 4, "Music"), ("Sound effects", 5, "Sound effect"), ("Overlays", 6, "Overlay"), ("Templates", 7, "Template")] {
@@ -863,7 +1093,7 @@ pub fn refresh_library(st: &mut State, ui: &App) {
             files.sort();
             for p in files {
                 let dur = st.sys.durations.get(&p).map(|d| util::short_duration(*d)).unwrap_or_else(|| "—".into());
-                push(&p.file_stem().unwrap_or_default().to_string_lossy(), kind, kt, &format!("From {}", shorten_home(&dir)), &dur, if kind == 6 { "Video tracks" } else { "Audio tracks" }, kt, &p.to_string_lossy());
+                push(&p.file_stem().unwrap_or_default().to_string_lossy(), kind, kt, &format!("From {}", shorten_home(&dir)), &dur, if kind == 6 { "Video tracks" } else { "Audio tracks" }, kt, &p.to_string_lossy(), "My files");
             }
         }
     }
@@ -882,7 +1112,7 @@ fn filter_library(st: &mut State, ui: &App) {
     if m.get_library_pick() as usize >= items.len() {
         m.set_library_pick(0);
     }
-    m.set_library(vec_model(layout_library(items, cat == 8 || cat == 1 || cat == 2, &m)));
+    m.set_library(vec_model(layout_library(items, cat != 0, &m)));
 }
 
 /// Places tiles on a 4-column grid. The Primitives, Titles and Transitions views are split into sections, each
@@ -939,6 +1169,12 @@ fn library_add(st: &mut State, ui: &App, i: i32) {
     if path.starts_with("transition-ui:") {
         st.toast(ui, "This transition is design only for now. The engine part comes later.");
         return;
+    }
+    for (tag, what) in [("effect-ui:", "effect"), ("music-ui:", "track"), ("sfx-ui:", "sound"), ("overlay-ui:", "overlay"), ("template-ui:", "template")] {
+        if path.starts_with(tag) {
+            st.toast(ui, format!("This {what} is design only for now. The engine part comes later."));
+            return;
+        }
     }
     if path.starts_with("title-ui:") {
         st.toast(ui, "This title is design only for now. The engine part comes later.");
