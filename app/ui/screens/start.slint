@@ -611,7 +611,7 @@ export component LibraryScreen inherits Rectangle {
     ];
     property <LibraryItem> pick: Model.library[Model.library-pick];
     function tint(k: int) -> color {
-        return k == 1 ? Theme.tint-title : k == 2 ? Theme.tint-transition : k == 3 ? Theme.tint-effect : k == 4 ? Theme.tint-music : k == 5 ? Theme.tint-sfx : k == 6 || k == 8 ? Theme.tint-overlay : Theme.tint-title;
+        return k == 1 ? Theme.tint-title : k == 2 ? Theme.tint-transition : k == 3 ? Theme.tint-effect : k == 4 ? Theme.tint-music : k == 5 ? Theme.tint-sfx : k == 6 ? Theme.tint-overlay : k == 7 ? Theme.tint-template : k == 8 ? Theme.tint-primitive : Theme.tint-title;
     }
     function item-icon(it: LibraryItem) -> image {
         return it.kind == 8 ? root.prim-icons[it.icon-id] : root.icon(it.kind);
