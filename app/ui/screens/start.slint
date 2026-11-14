@@ -610,6 +610,12 @@ export component LibraryScreen inherits Rectangle {
         @image-url("../icons/image.svg"), @image-url("../icons/layers.svg"), @image-url("../icons/crosshair.svg"), @image-url("../icons/fit.svg"),
     ];
     property <LibraryItem> pick: Model.library[Model.library-pick];
+    function pack-title(k: int) -> string {
+        return k == 4 ? "Full music pack" : k == 5 ? "Full sound effects pack" : k == 6 ? "Full overlays pack" : k == 7 ? "Full templates pack" : "";
+    }
+    function pack-sub(k: int) -> string {
+        return k == 4 ? "22 tracks, about 140 MB. A few starter tracks are built in; the rest download once and work offline." : k == 5 ? "60 sounds, about 60 MB. A few starter sounds are built in; the rest download once and work offline." : k == 6 ? "31 overlays, about 450 MB. A few starter overlays are built in; the rest download once and work offline." : "20 templates, about 90 MB. A few starter templates are built in; the rest download once and work offline.";
+    }
     function dot(k: int) -> color {
         return k == 1 ? #e0b23a : k == 2 ? #e0558f : k == 3 ? #8b5cf6 : k == 4 ? #2fb89a : k == 5 ? #8fbf2a : k == 6 ? #4a86e0 : k == 7 ? #2bb5d0 : #ee8a2e;
     }
@@ -652,6 +658,24 @@ export component LibraryScreen inherits Rectangle {
                     if i > 0: Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: root.dot(root.cat-ids[i]); }
                     ct := Text { x: i == 0 ? 10px : 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == root.cat-ids[i] ? Theme.on-accent : Theme.text; font-size: 11px; }
                     TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = root.cat-ids[i]; Backend.library-filter(Model.library-filter); } }
+                }
+            }
+            if root.pack-title(Model.library-cat) != "": Rectangle {
+                height: 58px;
+                border-width: 1px; border-color: Theme.border; border-radius: 2px; background: Theme.card-bg;
+                Rectangle { x: 0px; width: 3px; background: root.dot(Model.library-cat); }
+                HorizontalLayout {
+                    padding-left: 18px; padding-right: 14px; spacing: 12px;
+                    VerticalLayout {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.pack-title(Model.library-cat); color: Theme.text; font-size: 13px; font-weight: 500; }
+                        Text { text: root.pack-sub(Model.library-cat); color: Theme.muted; font-size: 11px; }
+                    }
+                    Rectangle { }
+                    VerticalLayout {
+                        alignment: center;
+                        PrimaryButton { small: true; has-icon: true; icon: @image-url("../icons/download.svg"); text: "Download pack"; clicked => { Backend.library-download(Model.library-cat); } }
+                    }
                 }
             }
             Rectangle { height: 16px; }

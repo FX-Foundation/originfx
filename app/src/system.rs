@@ -1589,6 +1589,9 @@ pub fn wire(ui: &App) {
         with(|st, ui| filter_library(st, ui));
     });
     b.on_library_select(|_| {});
+    b.on_library_download(|_| {
+        with(|st, ui| st.toast(ui, "Content packs are design only for now. Downloads come with the engine part."));
+    });
 
     b.on_setting_changed(|k, v| {
         with(|st, ui| setting_changed(st, ui, k.as_str(), v.as_str()));
