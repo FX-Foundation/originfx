@@ -659,6 +659,41 @@ fn refresh_lessons(st: &mut State, ui: &App) {
 
 // ---------------------------------------------------------------- library
 
+/// name, group, description, length, looks like, path. An empty path means the tile is design only
+/// for now (no engine behind it yet). The four with `title:N` paths are the ones that work today.
+const TITLES: [(&str, &str, &str, &str, &str, &str); 30] = [
+    ("Lower third · Bar", "Lower thirds", "A name tag with an accent bar. Type a name and a role.", "5 seconds", "Broadcast", "title:0"),
+    ("Lower third · Minimal", "Lower thirds", "A thin line with small text. Quiet and clean.", "5 seconds", "Clean", "title:1"),
+    ("Lower third · Box", "Lower thirds", "A solid panel behind the name and role.", "5 seconds", "Solid", ""),
+    ("Lower third · Slide-in tag", "Lower thirds", "A tag that slides in from the edge of the screen.", "5 seconds", "Dynamic", ""),
+    ("Lower third · Split two-tone", "Lower thirds", "Two colour blocks, one for the name and one for the role.", "5 seconds", "Bold", ""),
+    ("Lower third · Glass panel", "Lower thirds", "A frosted, blurred panel with the name on it.", "5 seconds", "Soft", ""),
+    ("Lower third · Name, role, logo", "Lower thirds", "A name tag with a slot for a logo.", "5 seconds", "Branded", ""),
+    ("Title · Centered", "Full-screen titles", "Words in the middle of the screen. Change the text, size and timing after adding it.", "5 seconds", "Cinematic", "title:2"),
+    ("Title · Split", "Full-screen titles", "A title in two parts, with a big word and a smaller one.", "5 seconds", "Editorial", "title:3"),
+    ("Title · Cinematic", "Full-screen titles", "Wide-spaced letters that fade in slowly.", "5 seconds", "Cinematic", ""),
+    ("Title · Stacked", "Full-screen titles", "Words stacked in big lines.", "5 seconds", "Bold", ""),
+    ("Title · Number and label", "Full-screen titles", "A big number with a small label under it.", "5 seconds", "Bold", ""),
+    ("Title · Quote card", "Full-screen titles", "A quote with the speaker's name below.", "5 seconds", "Editorial", ""),
+    ("Opening · Film title reveal", "Opening and closing", "The title appears like the start of a film.", "5 seconds", "Cinematic", ""),
+    ("Opening · Chapter number", "Opening and closing", "Part 2, Day 3 or any section marker.", "3 seconds", "Clean", ""),
+    ("Closing · End card", "Opening and closing", "The channel name and a subscribe prompt.", "8 seconds", "Branded", ""),
+    ("Closing · Scrolling credits", "Opening and closing", "Names that scroll up the screen.", "Fits the list", "Classic", ""),
+    ("Captions · Standard", "Captions and subtitles", "Plain captions along the bottom, timed to the voice.", "Follows speech", "Clean", ""),
+    ("Captions · Word highlight", "Captions and subtitles", "Each spoken word lights up as it is said.", "Follows speech", "Social", ""),
+    ("Captions · Karaoke fill", "Captions and subtitles", "Words fill with colour as they are spoken.", "Follows speech", "Social", ""),
+    ("Captions · Two speakers", "Captions and subtitles", "A different colour for each voice.", "Follows speech", "Clean", ""),
+    ("Call-out · Label with arrow", "Call-outs", "A label with an arrow that points at something in the shot.", "4 seconds", "Clean", ""),
+    ("Call-out · Circle and ping", "Call-outs", "A ring that pulses around an object.", "3 seconds", "Bold", ""),
+    ("Call-out · Underline draw-on", "Call-outs", "A line that draws itself under the words.", "3 seconds", "Clean", ""),
+    ("Call-out · Counter", "Call-outs", "A number that counts up to a value.", "3 seconds", "Bold", ""),
+    ("Call-out · Progress bar", "Call-outs", "A bar that fills to a percentage.", "4 seconds", "Clean", ""),
+    ("Social · Reel hook", "Social styles", "A bold opening line for the first second of a Reel or Short.", "2 seconds", "Social", ""),
+    ("Social · TikTok captions", "Social styles", "Big, punchy captions in the short-video style.", "Follows speech", "Social", ""),
+    ("Social · Countdown", "Social styles", "A 3, 2, 1 countdown.", "3 seconds", "Bold", ""),
+    ("Social · Follow tag", "Social styles", "A swipe-up or follow prompt that slides in.", "3 seconds", "Social", ""),
+];
+
 /// name, group, description, looks like. Order must match `prim-icons` in start.slint.
 const PRIMITIVES: [(&str, &str, &str, &str); 25] = [
     ("Rectangle", "Shape", "A box. Each corner can be rounded on its own.", "Solid"),
@@ -704,6 +739,31 @@ pub fn refresh_library(st: &mut State, ui: &App) {
             favorite: false,
             path: format!("primitive:{n}").into(),
             icon_id: n as i32,
+            group: match *group {
+                "Shape" => "Shapes",
+                "Helper" => "Helpers",
+                other => other,
+            }
+            .into(),
+            col: 0,
+            y: 0,
+        });
+        id += 1;
+    }
+    for (n, (name, group, desc, len, looks, path)) in TITLES.iter().enumerate() {
+        all.push(LibraryItem {
+            id,
+            name: (*name).into(),
+            kind: 1,
+            kind_text: "Title".into(),
+            desc: (*desc).into(),
+            length: (*len).into(),
+            works_on: "Any project".into(),
+            looks_like: (*looks).into(),
+            favorite: false,
+            path: if path.is_empty() { format!("title-ui:{n}") } else { (*path).to_string() }.into(),
+            icon_id: 0,
+            group: (*group).into(),
             col: 0,
             y: 0,
         });
@@ -722,14 +782,12 @@ pub fn refresh_library(st: &mut State, ui: &App) {
             favorite: false,
             path: path.into(),
             icon_id: 0,
+            group: String::new().into(),
             col: 0,
             y: 0,
         });
         id += 1;
     };
-    for (i, t) in ["Lower third · Bar", "Lower third · Minimal", "Title · Centered", "Title · Split"].iter().enumerate() {
-        push(t, 1, "Title", "Animated words on screen. Change the text, size and timing after adding it.", "5 seconds", "Any project", ["Broadcast", "Clean", "Cinematic", "Editorial"][i], &format!("title:{i}"));
-    }
     for (i, (n, _)) in crate::session::TRANSITIONS.iter().enumerate() {
         push(n, 2, "Transition", "Goes between two clips that touch.", "1 second", "Any cut", "Smooth", &format!("transition:{i}"));
     }
@@ -765,11 +823,11 @@ fn filter_library(st: &mut State, ui: &App) {
     if m.get_library_pick() as usize >= items.len() {
         m.set_library_pick(0);
     }
-    m.set_library(vec_model(layout_library(items, cat == 8, &m)));
+    m.set_library(vec_model(layout_library(items, cat == 8 || cat == 1, &m)));
 }
 
-/// Places tiles on a 4-column grid. The Primitives view is split into sections (Shapes, Fill and
-/// outline, Text, Helpers), each with its own heading and its own grid.
+/// Places tiles on a 4-column grid. The Primitives and Titles views are split into sections, each
+/// with its own heading and its own grid.
 fn layout_library(mut items: Vec<LibraryItem>, sectioned: bool, m: &Model<'_>) -> Vec<LibraryItem> {
     const COLS: usize = 4;
     const ROW: i32 = 118;
@@ -782,18 +840,13 @@ fn layout_library(mut items: Vec<LibraryItem>, sectioned: bool, m: &Model<'_>) -
         let mut k = 0usize;
         let mut rows_open = false;
         for it in items.iter_mut() {
-            if it.kind_text.as_str() != prev {
+            if it.group.as_str() != prev {
                 if rows_open {
                     y += (k.div_ceil(COLS) as i32) * ROW + GAP;
                 }
-                let title = match it.kind_text.as_str() {
-                    "Shape" => "Shapes",
-                    "Helper" => "Helpers",
-                    other => other,
-                };
-                heads.push(LibraryHead { title: title.into(), y });
+                heads.push(LibraryHead { title: it.group.clone(), y });
                 y += HEAD;
-                prev = it.kind_text.to_string();
+                prev = it.group.to_string();
                 k = 0;
                 rows_open = true;
             }
@@ -822,6 +875,10 @@ fn library_add(st: &mut State, ui: &App, i: i32) {
     let path = item.path.to_string();
     if path.starts_with("primitive:") {
         st.toast(ui, "Primitives are not wired into the engine yet.");
+        return;
+    }
+    if path.starts_with("title-ui:") {
+        st.toast(ui, "This title is design only for now. The engine part comes later.");
         return;
     }
     if st.session.is_none() {
