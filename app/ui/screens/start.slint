@@ -653,10 +653,10 @@ export component LibraryScreen inherits Rectangle {
                 spacing: 6px; alignment: start;
                 for c[i] in root.cats: Rectangle {
                     height: 24px; width: ct.preferred-width + 30px;
-                    border-width: 1px; border-color: Model.library-cat == root.cat-ids[i] ? Theme.accent : Theme.border;
-                    background: Model.library-cat == root.cat-ids[i] ? Theme.accent : Theme.card-bg;
+                    border-width: 1px; border-color: Model.library-cat == root.cat-ids[i] ? root.dot(root.cat-ids[i]) : Theme.border;
+                    background: Model.library-cat == root.cat-ids[i] ? root.dot(root.cat-ids[i]) : Theme.card-bg;
                     Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: root.dot(root.cat-ids[i]); }
-                    ct := Text { x: 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == root.cat-ids[i] ? Theme.on-accent : Theme.text; font-size: 11px; }
+                    ct := Text { x: 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == root.cat-ids[i] ? (root.cat-ids[i] == 1 || root.cat-ids[i] == 5 ? #1a1a1a : #ffffff) : Theme.text; font-size: 11px; }
                     TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = root.cat-ids[i]; Backend.library-filter(Model.library-filter); } }
                 }
             }

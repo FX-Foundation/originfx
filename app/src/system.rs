@@ -1108,7 +1108,11 @@ fn filter_library(st: &mut State, ui: &App) {
     let m = ui.global::<Model>();
     let cat = m.get_library_cat();
     let f = m.get_library_filter().to_lowercase();
-    let items: Vec<LibraryItem> = st.sys.library.iter().filter(|i| (cat == 0 || i.kind == cat) && (f.is_empty() || i.name.to_lowercase().contains(&f))).cloned().collect();
+    let mut items: Vec<LibraryItem> = st.sys.library.iter().filter(|i| (cat == 0 || i.kind == cat) && (f.is_empty() || i.name.to_lowercase().contains(&f))).cloned().collect();
+    if cat == 0 {
+        // The All view leads with Titles and ends with Primitives, so it never looks like the Primitives tab.
+        items.sort_by_key(|i| if i.kind == 8 { 99 } else { i.kind });
+    }
     if m.get_library_pick() as usize >= items.len() {
         m.set_library_pick(0);
     }
