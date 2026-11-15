@@ -617,7 +617,7 @@ export component LibraryScreen inherits Rectangle {
         return k == 4 ? "22 tracks, about 140 MB. A few starter tracks are built in; the rest download once and work offline." : k == 5 ? "60 sounds, about 60 MB. A few starter sounds are built in; the rest download once and work offline." : k == 6 ? "31 overlays, about 450 MB. A few starter overlays are built in; the rest download once and work offline." : "20 templates, about 90 MB. A few starter templates are built in; the rest download once and work offline.";
     }
     function dot(k: int) -> color {
-        return k == 1 ? #e0b23a : k == 2 ? #e0558f : k == 3 ? #8b5cf6 : k == 4 ? #2fb89a : k == 5 ? #8fbf2a : k == 6 ? #4a86e0 : k == 7 ? #2bb5d0 : #ee8a2e;
+        return k == 0 ? #e0392f : k == 1 ? #e0b23a : k == 2 ? #e0558f : k == 3 ? #8b5cf6 : k == 4 ? #2fb89a : k == 5 ? #8fbf2a : k == 6 ? #4a86e0 : k == 7 ? #2bb5d0 : #ee8a2e;
     }
     function tint(k: int) -> color {
         return k == 1 ? Theme.tint-title : k == 2 ? Theme.tint-transition : k == 3 ? Theme.tint-effect : k == 4 ? Theme.tint-music : k == 5 ? Theme.tint-sfx : k == 6 ? Theme.tint-overlay : k == 7 ? Theme.tint-template : k == 8 ? Theme.tint-primitive : Theme.tint-title;
@@ -652,11 +652,11 @@ export component LibraryScreen inherits Rectangle {
             HorizontalLayout {
                 spacing: 6px; alignment: start;
                 for c[i] in root.cats: Rectangle {
-                    height: 24px; width: ct.preferred-width + (i == 0 ? 20px : 30px);
+                    height: 24px; width: ct.preferred-width + 30px;
                     border-width: 1px; border-color: Model.library-cat == root.cat-ids[i] ? Theme.accent : Theme.border;
                     background: Model.library-cat == root.cat-ids[i] ? Theme.accent : Theme.card-bg;
-                    if i > 0: Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: root.dot(root.cat-ids[i]); }
-                    ct := Text { x: i == 0 ? 10px : 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == root.cat-ids[i] ? Theme.on-accent : Theme.text; font-size: 11px; }
+                    Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: root.dot(root.cat-ids[i]); }
+                    ct := Text { x: 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == root.cat-ids[i] ? Theme.on-accent : Theme.text; font-size: 11px; }
                     TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = root.cat-ids[i]; Backend.library-filter(Model.library-filter); } }
                 }
             }
