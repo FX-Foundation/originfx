@@ -417,10 +417,14 @@ export component LibraryScreen inherits Rectangle {
                 spacing: 6px; alignment: start;
                 for c[i] in root.cats: Rectangle {
                     height: 24px; width: ct.preferred-width + (i == 0 ? 20px : 30px);
-                    border-width: 1px; border-color: Model.library-cat == i ? Theme.accent : Theme.border;
-                    background: Model.library-cat == i ? Theme.accent : Theme.card-bg;
+                    border-width: 1px; border-color: Model.library-cat == i ? (Settings.dark ? #ffffff8c : #0000008c) : Theme.border;
+                    background: Theme.card-bg;
+                    if Model.library-cat == i: Rectangle {
+                        width: parent.width; height: parent.height;
+                        background: Settings.dark ? @linear-gradient(180deg, #ffffff52 0%, #ffffff1a 100%) : @linear-gradient(180deg, #00000042 0%, #00000014 100%);
+                    }
                     if i > 0: Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: i == 1 ? Theme.gold : i == 2 || i == 3 ? Theme.clip-overlay-border : i == 4 || i == 5 ? Theme.success : Theme.accent; }
-                    ct := Text { x: i == 0 ? 10px : 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == i ? Theme.on-accent : Theme.text; font-size: 11px; }
+                    ct := Text { x: i == 0 ? 10px : 21px; height: parent.height; vertical-alignment: center; text: c; color: Theme.text; font-size: 11px; }
                     TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = i; Backend.library-filter(Model.library-filter); } }
                 }
             }
