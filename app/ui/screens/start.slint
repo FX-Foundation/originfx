@@ -653,10 +653,14 @@ export component LibraryScreen inherits Rectangle {
                 spacing: 6px; alignment: start;
                 for c[i] in root.cats: Rectangle {
                     height: 24px; width: ct.preferred-width + 30px;
-                    border-width: 1px; border-color: Model.library-cat == root.cat-ids[i] ? root.dot(root.cat-ids[i]) : Theme.border;
-                    background: Model.library-cat == root.cat-ids[i] ? root.dot(root.cat-ids[i]) : Theme.card-bg;
+                    border-width: 1px; border-color: Model.library-cat == root.cat-ids[i] ? (Settings.dark ? #ffffff8c : #0000008c) : Theme.border;
+                    background: Theme.card-bg;
+                    if Model.library-cat == root.cat-ids[i]: Rectangle {
+                        width: parent.width; height: parent.height;
+                        background: Settings.dark ? @linear-gradient(180deg, #ffffff52 0%, #ffffff1a 100%) : @linear-gradient(180deg, #00000042 0%, #00000014 100%);
+                    }
                     Rectangle { x: 9px; width: 7px; height: 7px; border-radius: 1px; background: root.dot(root.cat-ids[i]); }
-                    ct := Text { x: 21px; height: parent.height; vertical-alignment: center; text: c; color: Model.library-cat == root.cat-ids[i] ? (root.cat-ids[i] == 1 || root.cat-ids[i] == 5 ? #1a1a1a : #ffffff) : Theme.text; font-size: 11px; }
+                    ct := Text { x: 21px; height: parent.height; vertical-alignment: center; text: c; color: Theme.text; font-size: 11px; }
                     TouchArea { mouse-cursor: pointer; clicked => { Model.library-cat = root.cat-ids[i]; Backend.library-filter(Model.library-filter); } }
                 }
             }
@@ -667,9 +671,10 @@ export component LibraryScreen inherits Rectangle {
                 HorizontalLayout {
                     padding-left: 18px; padding-right: 14px; spacing: 12px;
                     VerticalLayout {
+                        min-width: 0px; horizontal-stretch: 1;
                         alignment: center; spacing: 2px;
-                        Text { text: root.pack-title(Model.library-cat); color: Theme.text; font-size: 13px; font-weight: 500; }
-                        Text { text: root.pack-sub(Model.library-cat); color: Theme.muted; font-size: 11px; }
+                        Text { text: root.pack-title(Model.library-cat); color: Theme.text; font-size: 13px; font-weight: 500; overflow: elide; }
+                        Text { text: root.pack-sub(Model.library-cat); color: Theme.muted; font-size: 11px; overflow: elide; }
                     }
                     Rectangle { }
                     VerticalLayout {
